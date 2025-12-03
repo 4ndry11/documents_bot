@@ -342,7 +342,11 @@ class DriveManager:
         if parent_id:
             file_metadata['parents'] = [parent_id]
 
-        folder = self.service.files().create(body=file_metadata, fields='id, webViewLink').execute()
+        folder = self.service.files().create(
+            body=file_metadata,
+            fields='id, webViewLink',
+            supportsAllDrives=True
+        ).execute()
         logger.info(f"Created folder: {name}")
         return folder
 
@@ -392,7 +396,12 @@ class DriveManager:
         filename = original_filename or os.path.basename(file_path)
         file_metadata = {'name': filename, 'parents': [folder_id]}
         media = MediaFileUpload(file_path, resumable=True)
-        file = self.service.files().create(body=file_metadata, media_body=media, fields='id, name, webViewLink, size').execute()
+        file = self.service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, name, webViewLink, size',
+            supportsAllDrives=True
+        ).execute()
         logger.info(f"Uploaded file: {filename}")
         return file
 
@@ -404,10 +413,20 @@ class DriveManager:
         media = MediaIoBaseUpload(BytesIO(content.encode('utf-8')), mimetype='text/plain')
 
         if existing:
-            file = self.service.files().update(fileId=existing['id'], media_body=media, fields='id, name, webViewLink, size').execute()
+            file = self.service.files().update(
+                fileId=existing['id'],
+                media_body=media,
+                fields='id, name, webViewLink, size',
+                supportsAllDrives=True
+            ).execute()
             logger.info(f"Updated text file: {filename}")
         else:
-            file = self.service.files().create(body=file_metadata, media_body=media, fields='id, name, webViewLink, size').execute()
+            file = self.service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id, name, webViewLink, size',
+                supportsAllDrives=True
+            ).execute()
             logger.info(f"Created text file: {filename}")
 
         return file

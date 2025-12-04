@@ -242,6 +242,11 @@ class Database:
         result = self.execute(query, (phone,), fetch=True)
         return result[0] if result else None
 
+    def get_client_by_id(self, client_id):
+        query = "SELECT * FROM docbot.clients WHERE id = %s"
+        result = self.execute(query, (client_id,), fetch=True)
+        return result[0] if result else None
+
     def update_client_drive_folder(self, client_id, folder_id, folder_url):
         query = """
             UPDATE docbot.clients
@@ -259,13 +264,13 @@ class Database:
         self.execute(query, (client_id,))
 
     # Documents
-    def add_document(self, client_id, document_type, file_name, drive_file_id, drive_file_url, file_size):
+    def add_document(self, client_id, document_type, file_name, drive_file_id, drive_file_url, file_size, uploaded_by_admin_id=None):
         query = """
-            INSERT INTO docbot.documents (client_id, document_type, file_name, drive_file_id, drive_file_url, file_size)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO docbot.documents (client_id, document_type, file_name, drive_file_id, drive_file_url, file_size, uploaded_by_admin_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """
-        result = self.execute(query, (client_id, document_type, file_name, drive_file_id, drive_file_url, file_size), fetch=True)
+        result = self.execute(query, (client_id, document_type, file_name, drive_file_id, drive_file_url, file_size, uploaded_by_admin_id), fetch=True)
         return result[0]['id'] if result else None
 
     def get_uploaded_types(self, client_id):
@@ -300,9 +305,9 @@ class Database:
         return result[0]['password'] if result else None
 
     # Notifications
-    def log_notification(self, client_id, notification_type, message):
-        query = "INSERT INTO docbot.notifications_log (client_id, notification_type, message) VALUES (%s, %s, %s)"
-        self.execute(query, (client_id, notification_type, message))
+    def log_notification(self, client_id, notification_type, message, admin_telegram_id=None):
+        query = "INSERT INTO docbot.notifications_log (client_id, notification_type, message, admin_telegram_id) VALUES (%s, %s, %s, %s)"
+        self.execute(query, (client_id, notification_type, message, admin_telegram_id))
 
     def get_inactive_clients(self):
         query = """
@@ -486,7 +491,21 @@ def normalize_phone(phone):
         return f"+{digits}"
     return ''
 
-async def notify_admins(message):
+def get_active_client(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отримати активного клієнта: через admin_mode або звичайного юзера"""
+    # Якщо адмін увійшов як клієнт
+    if 'admin_mode' in context.user_data:
+        client_id = context.user_data['admin_mode']['client_id']
+        client = db.get_client_by_id(client_id)
+        admin_id = context.user_data['admin_mode']['admin_telegram_id']
+        return client, admin_id  # (client, admin_id)
+
+    # Звичайний клієнт
+    user_id = update.effective_user.id
+    client = db.get_client_by_telegram_id(user_id)
+    return client, None  # (client, None)
+
+async def notify_admins(message, parse_mode='HTML'):
     """Отправить уведомление всем админам из файла"""
     if not notification_bot:
         return
@@ -501,7 +520,8 @@ async def notify_admins(message):
             await notification_bot.send_message(
                 chat_id=admin_id,
                 text=message,
-                parse_mode='HTML'
+                parse_mode=parse_mode,
+                disable_web_page_preview=True
             )
             logger.info(f"Notification sent to admin: {admin_id}")
         except Exception as e:
@@ -633,7 +653,9 @@ async def receive_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🆕 Новий клієнт зареєстрований!\n\n"
         f"👤 {full_name}\n"
         f"📱 {phone}\n"
-        f"🆔 Telegram: {update.effective_user.id}"
+        f"🆔 Telegram: {update.effective_user.id}\n"
+        f"📊 Статус: in_progress (0/9 документів)\n"
+        f"📁 <a href=\"{folders['client']['webViewLink']}\">Відкрити папку на Drive</a>"
     )
 
     return ConversationHandler.END
@@ -823,10 +845,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
             # Уведомляем админов
             await notify_admins(
-                f"🔐 Клієнт зберіг пароль від ЕЦП\\n\\n"
-                f"👤 {client['full_name']}\\n"
-                f"📱 {client['phone']}\\n"
-                f"🔑 Пароль: {password}"
+                f"🔐 Клієнт зберіг пароль від ЕЦП\n\n"
+                f"👤 {client['full_name']}\n"
+                f"📱 {client['phone']}\n"
+                f"🔑 Пароль: {password}\n"
+                f"📊 Статус: {client['status']}\n"
+                f"📁 <a href=\"{client['drive_folder_url']}\">Відкрити папку на Drive</a>"
             )
 
             # Показываем чеклист новым сообщением
@@ -847,8 +871,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    client = db.get_client_by_telegram_id(user_id)
+    client, admin_id = get_active_client(update, context)
 
     if not client:
         await update.message.reply_text("❌ Ви ще не зареєстровані. Натисніть /start")
@@ -932,14 +955,16 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
             file_name=new_file_name,
             drive_file_id=drive_file['id'],
             drive_file_url=drive_file['webViewLink'],
-            file_size=int(drive_file.get('size', 0))
+            file_size=int(drive_file.get('size', 0)),
+            uploaded_by_admin_id=admin_id
         )
 
         # Логируем в notifications_log
         db.log_notification(
             client_id=client['id'],
             notification_type='document_uploaded',
-            message=f"Завантажено документ: {doc_info['name']} - {new_file_name}"
+            message=f"{'Адмін завантажив' if admin_id else 'Завантажено'} документ: {doc_info['name']} - {new_file_name}",
+            admin_telegram_id=admin_id
         )
 
         db.update_last_activity(client['id'])
@@ -1029,29 +1054,51 @@ async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message += f"\n\n📊 <b>Ваш прогрес: {required_uploaded}/{required_total} обов'язкових документів</b>\n\n"
     message += f"{progress_bar}"
 
+    # Перевіряємо старий статус ДО оновлення
+    old_status = client['status']
+
     if required_uploaded == required_total:
+        # Оновлюємо статус
         db.update_client_status(client['id'], 'completed')
 
-        # Логируем завершение сбора документов
-        db.log_notification(
-            client_id=client['id'],
-            notification_type='collection_completed',
-            message=f"Клієнт завершив збір всіх обов'язкових документів ({required_total}/{required_total})"
-        )
+        # Перевіряємо чи це перший раз
+        if old_status != 'completed':
+            # 🎉 ПЕРШИЙ РАЗ - повне привітання
+            db.log_notification(
+                client_id=client['id'],
+                notification_type='collection_completed',
+                message=f"Клієнт завершив збір всіх обов'язкових документів ({required_total}/{required_total})"
+            )
 
-        message += (
-            "\n\n🎉 <b>ВІТАЄМО! ВИ ЗІБРАЛИ ВСІ ДОКУМЕНТИ!</b>\n\n"
-            "✅ Всі обов'язкові документи успішно завантажено!\n\n"
-            "🎁 <b>Ви отримали бонус від компанії!</b>\n"
-            "Зв'яжіться з менеджером для отримання подарунка.\n\n"
-            "💪 Дякуємо за вашу наполегливість!"
-        )
-        await notify_admins(
-            f"🎉 Клієнт завершив збір документів!\n\n"
-            f"👤 {client['full_name']}\n"
-            f"📱 {client['phone']}"
-        )
+            message += (
+                "\n\n🎉 <b>ВІТАЄМО! ВИ ЗІБРАЛИ ВСІ ДОКУМЕНТИ!</b>\n\n"
+                "✅ Всі обов'язкові документи успішно завантажено!\n\n"
+                "🎁 <b>Ви отримали бонус від компанії!</b>\n"
+                "Зв'яжіться з менеджером для отримання подарунка.\n\n"
+                "💪 Дякуємо за вашу наполегливість!"
+            )
+
+            await notify_admins(
+                f"🎉 Клієнт завершив збір ОБОВ'ЯЗКОВИХ документів!\n\n"
+                f"👤 {client['full_name']}\n"
+                f"📱 {client['phone']}\n"
+                f"📊 Статус: completed ({required_total}/{required_total} документів)\n"
+                f"📁 <a href=\"{client['drive_folder_url']}\">Відкрити папку на Drive</a>"
+            )
+        else:
+            # Вже був completed - додавання після завершення
+            message += "\n\n✅ Документ додано! Всі обов'язкові документи зібрані."
+
+            await notify_admins(
+                f"📎 Клієнт завантажив додатковий документ\n\n"
+                f"👤 {client['full_name']}\n"
+                f"📱 {client['phone']}\n"
+                f"📑 {doc_info['name']}\n"
+                f"📊 Статус: completed (9/9 + додаткові)\n"
+                f"📁 <a href=\"{client['drive_folder_url']}\">Відкрити папку на Drive</a>"
+            )
     else:
+        # Ще не всі документи
         # Мотивуюче повідомлення залежно від прогресу
         remaining = required_total - required_uploaded
         if remaining == 1:
@@ -1068,7 +1115,8 @@ async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 {client['full_name']}\n"
             f"📱 {client['phone']}\n"
             f"📑 {doc_info['name']}\n"
-            f"📊 Прогрес: {required_uploaded}/{required_total}"
+            f"📊 Статус: {client['status']} ({required_uploaded}/{required_total} документів)\n"
+            f"📁 <a href=\"{client['drive_folder_url']}\">Відкрити папку на Drive</a>"
         )
 
     # Отправляем итоговое сообщение
@@ -1104,6 +1152,151 @@ def get_main_keyboard():
 # ============================================================================
 # ADMIN COMMANDS
 # ============================================================================
+
+async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /login +380XXXXXXXXX - увійти як клієнт"""
+    admin_id = update.effective_user.id
+
+    # Перевіряємо чи це адмін
+    if admin_id not in load_admins():
+        await update.message.reply_text("❌ У вас немає доступу до адмін-панелі")
+        return
+
+    if not context.args or len(context.args) == 0:
+        await update.message.reply_text(
+            "❌ Невірний формат\n\n"
+            "Використання: /login +380XXXXXXXXX\n"
+            "Приклад: /login +380501234567"
+        )
+        return
+
+    phone = normalize_phone(context.args[0].strip())
+    client = db.get_client_by_phone(phone)
+
+    if not client:
+        await update.message.reply_text(
+            f"❌ Клієнт з номером {phone} не знайдений.\n\n"
+            f"Для створення нового клієнта:\n"
+            f"/register {phone} ПІБ_клієнта\n\n"
+            f"Приклад: /register {phone} Іваненко Андрій Васильович"
+        )
+        return
+
+    # Зберігаємо сесію в context
+    context.user_data['admin_mode'] = {
+        'client_id': client['id'],
+        'client_phone': phone,
+        'admin_telegram_id': admin_id
+    }
+
+    uploaded_types = db.get_uploaded_types(client['id'])
+    required_count = len(REQUIRED_DOCUMENTS)
+    uploaded_required = sum(1 for doc in REQUIRED_DOCUMENTS if doc in uploaded_types)
+
+    await update.message.reply_text(
+        f"✅ <b>Увійшли в режим адміністратора</b>\n\n"
+        f"👤 Клієнт: {client['full_name']}\n"
+        f"📱 Телефон: {client['phone']}\n"
+        f"📊 Прогрес: {uploaded_required}/{required_count} документів\n"
+        f"📁 <a href=\"{client['drive_folder_url']}\">Папка на Drive</a>\n\n"
+        f"💬 <i>Уведомлення від інших клієнтів продовжують приходити</i>\n\n"
+        f"Щоб вийти: /logout",
+        parse_mode='HTML',
+        disable_web_page_preview=True
+    )
+
+    # Показуємо чеклист
+    await show_checklist(update, context, force_new_message=True)
+
+async def admin_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /register +380XXXXXXXXX ПІБ - створити нового клієнта"""
+    admin_id = update.effective_user.id
+
+    if admin_id not in load_admins():
+        await update.message.reply_text("❌ У вас немає доступу")
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "❌ Невірний формат\n\n"
+            "Використання: /register +380XXXXXXXXX ПІБ\n"
+            "Приклад: /register +380501234567 Іваненко Андрій Васильович"
+        )
+        return
+
+    phone = normalize_phone(context.args[0].strip())
+    full_name = ' '.join(context.args[1:])
+
+    # Перевіряємо чи не існує вже
+    existing = db.get_client_by_phone(phone)
+    if existing:
+        await update.message.reply_text(f"❌ Клієнт з номером {phone} вже існує")
+        return
+
+    # Створюємо клієнта (telegram_id = 0 для адмін-створених)
+    client = db.create_client(
+        telegram_id=0,
+        full_name=full_name,
+        phone=phone
+    )
+
+    try:
+        # Створюємо папки на Drive
+        folders = drive.create_client_folder_structure(full_name, phone)
+        db.update_client_drive_folder(client['id'], folders['client']['id'], folders['client']['webViewLink'])
+
+        # Логуємо
+        db.log_notification(
+            client_id=client['id'],
+            notification_type='admin_registered_client',
+            message=f"Адмін зареєстрував клієнта: {full_name}, {phone}",
+            admin_telegram_id=admin_id
+        )
+
+        # Одразу входимо в режим адміна
+        context.user_data['admin_mode'] = {
+            'client_id': client['id'],
+            'client_phone': phone,
+            'admin_telegram_id': admin_id
+        }
+
+        await update.message.reply_text(
+            f"✅ <b>Клієнт створений і ви увійшли в режим адміністратора</b>\n\n"
+            f"👤 {full_name}\n"
+            f"📱 {phone}\n"
+            f"📁 <a href=\"{folders['client']['webViewLink']}\">Папка на Drive</a>",
+            parse_mode='HTML',
+            disable_web_page_preview=True
+        )
+
+        await notify_admins(
+            f"🆕 Адмін створив нового клієнта\n\n"
+            f"👤 {full_name}\n"
+            f"📱 {phone}\n"
+            f"👨‍💼 Адмін ID: {admin_id}\n"
+            f"📊 Статус: in_progress (0/9 документів)\n"
+            f"📁 <a href=\"{folders['client']['webViewLink']}\">Відкрити папку на Drive</a>"
+        )
+
+        # Показуємо чеклист
+        await show_checklist(update, context, force_new_message=True)
+
+    except Exception as e:
+        logger.error(f"Failed to create client: {e}")
+        await update.message.reply_text(f"❌ Помилка створення клієнта: {str(e)}")
+
+async def admin_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /logout - вийти з режиму адміністратора"""
+    if 'admin_mode' in context.user_data:
+        client_phone = context.user_data['admin_mode']['client_phone']
+        context.user_data.pop('admin_mode')
+
+        await update.message.reply_text(
+            f"✅ Вийшли з облікового запису клієнта {client_phone}\n\n"
+            f"Ви знову в звичайному режимі адміністратора."
+        )
+    else:
+        await update.message.reply_text("⚠️ Ви не в режимі адміністратора")
 
 async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /info +380XXXXXXXXX - проверить какие документы загрузил клиент"""
@@ -1188,6 +1381,10 @@ def main():
     )
 
     application.add_handler(conv_handler)
+    # Admin commands
+    application.add_handler(CommandHandler('login', admin_login))
+    application.add_handler(CommandHandler('register', admin_register))
+    application.add_handler(CommandHandler('logout', admin_logout))
     application.add_handler(CommandHandler('info', info_command))
     application.add_handler(CallbackQueryHandler(handle_upload_request, pattern=f"^{CALLBACK_UPLOAD_PREFIX}"))
     application.add_handler(CallbackQueryHandler(handle_done, pattern=f"^{CALLBACK_DONE}$"))

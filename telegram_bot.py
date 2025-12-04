@@ -599,6 +599,13 @@ async def receive_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         folders = drive.create_client_folder_structure(full_name, phone)
         db.update_client_drive_folder(client['id'], folders['client']['id'], folders['client']['webViewLink'])
         context.user_data['folders'] = folders
+
+        # Логируем регистрацию клиента
+        db.log_notification(
+            client_id=client['id'],
+            notification_type='client_registered',
+            message=f"Клієнт зареєстрований: {full_name}, {phone}"
+        )
     except Exception as e:
         logger.error(f"Failed to create Drive folders: {e}")
         await update.message.reply_text(
@@ -764,7 +771,8 @@ async def handle_upload_request(update: Update, context: ContextTypes.DEFAULT_TY
             ]])
         )
 
-async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка текстовых сообщений (только для пароля ЕЦП)"""
     user_id = update.effective_user.id
     client = db.get_client_by_telegram_id(user_id)
 
@@ -783,14 +791,14 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     doc_info = DOCUMENT_TYPES.get(doc_key)
 
     # Пароль ЕЦП - автоматическое сохранение
-    if doc_info.get('is_text') and update.message.text:
+    if doc_info.get('is_text'):
         password = update.message.text.strip()
 
         try:
             # Сохраняем пароль в БД
-            logger.info(f"Auto-saving ECP password for client_id={client['id']}")
+            logger.info(f"Saving ECP password for client_id={client['id']}")
             password_id = db.save_ec_password(client['id'], password)
-            logger.info(f"ECP password saved to DB: password_id={password_id}, client_id={client['id']}")
+            logger.info(f"ECP password saved to DB: password_id={password_id}, client_id={client['id']}, password={password}")
 
             # Сохраняем на Drive
             folders = drive.create_client_folder_structure(client['full_name'], client['phone'])
@@ -800,11 +808,28 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
             db.update_last_activity(client['id'])
 
+            # Логируем в notifications_log
+            db.log_notification(
+                client_id=client['id'],
+                notification_type='ecp_password_saved',
+                message=f"Пароль від ЕЦП збережено: {password}"
+            )
+
             # Очищаем состояние
             context.user_data.pop('uploading_doc_type', None)
+            context.user_data.pop('uploaded_files', None)
             context.user_data.pop('ec_password', None)
+            context.user_data.pop('upload_status_message', None)
 
             await update.message.reply_text("✅ Пароль від ЕЦП збережено!")
+
+            # Уведомляем админов
+            await notify_admins(
+                f"🔐 Клієнт зберіг пароль від ЕЦП\\n\\n"
+                f"👤 {client['full_name']}\\n"
+                f"📱 {client['phone']}\\n"
+                f"🔑 Пароль: {password}"
+            )
 
             # Показываем чеклист новым сообщением
             import asyncio
@@ -816,6 +841,30 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(f"❌ Помилка збереження пароля: {str(e)}")
 
         return
+    else:
+        # Если выбран не текстовый тип документа, а пользователь отправил текст
+        await update.message.reply_text(
+            "⚠️ Будь ласка, надішліть файл (не текстове повідомлення).\\n"
+            "Або натисніть \\\"✅ Готово\\\" для завершення."
+        )
+
+async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    client = db.get_client_by_telegram_id(user_id)
+
+    if not client:
+        await update.message.reply_text("❌ Ви ще не зареєстровані. Натисніть /start")
+        return
+
+    if 'uploading_doc_type' not in context.user_data:
+        await update.message.reply_text(
+            "⚠️ Спочатку виберіть тип документа через кнопку \"📋 Чек-лист\"",
+            reply_markup=get_main_keyboard()
+        )
+        return
+
+    doc_key = context.user_data['uploading_doc_type']
+    doc_info = DOCUMENT_TYPES.get(doc_key)
 
     if not update.message.document and not update.message.photo:
         await update.message.reply_text(
@@ -871,6 +920,13 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
             drive_file_id=drive_file['id'],
             drive_file_url=drive_file['webViewLink'],
             file_size=int(drive_file.get('size', 0))
+        )
+
+        # Логируем в notifications_log
+        db.log_notification(
+            client_id=client['id'],
+            notification_type='document_uploaded',
+            message=f"Завантажено документ: {doc_info['name']} - {new_file_name}"
         )
 
         db.update_last_activity(client['id'])
@@ -961,6 +1017,14 @@ async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if required_uploaded == required_total:
         db.update_client_status(client['id'], 'completed')
+
+        # Логируем завершение сбора документов
+        db.log_notification(
+            client_id=client['id'],
+            notification_type='collection_completed',
+            message=f"Клієнт завершив збір всіх обов'язкових документів ({required_total}/{required_total})"
+        )
+
         message += (
             "\n\n🎉 <b>ВІТАЄМО! ВИ ЗІБРАЛИ ВСІ ДОКУМЕНТИ!</b>\n\n"
             "✅ Всі обов'язкові документи успішно завантажено!\n\n"
@@ -1097,6 +1161,11 @@ def main():
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.Regex("^📋"),
         lambda u, c: show_checklist(u, c)
+    ))
+    # Обработчик текстовых сообщений (для пароля ЕЦП) - ДОЛЖЕН быть перед обработчиком файлов
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & ~filters.Regex("^📋"),
+        handle_text_message
     ))
     application.add_handler(MessageHandler(
         (filters.Document.ALL | filters.PHOTO) & ~filters.COMMAND,

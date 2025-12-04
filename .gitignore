@@ -1,0 +1,22 @@
+# Секретные файлы - НЕ ЗАГРУЖАТЬ на GitHub!
+credentials.json
+client_secret.json
+token.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

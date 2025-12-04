@@ -739,10 +739,9 @@ async def handle_upload_request(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(
             f"🔐 <b>{doc_info['name']}</b>\n\n"
             f"Будь ласка, надішліть пароль від ЕЦП у вигляді текстового повідомлення.\n\n"
-            f"Після відправки натисніть кнопку \"✅ Готово\".",
+            f"💡 Просто напишіть пароль, і бот автоматично його розпізнає та збереже.",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Готово", callback_data=CALLBACK_DONE),
                 InlineKeyboardButton("« Назад", callback_data=CALLBACK_BACK)
             ]])
         )

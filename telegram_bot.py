@@ -47,6 +47,7 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 ROOT_FOLDER_ID = os.getenv('ROOT_FOLDER_ID')
 GOOGLE_CREDENTIALS_FILE = os.getenv('GOOGLE_CREDENTIALS_FILE', 'credentials.json')
 GOOGLE_CREDENTIALS_BASE64 = os.getenv('GOOGLE_CREDENTIALS_BASE64')
+DRIVE_OWNER_EMAIL = os.getenv('DRIVE_OWNER_EMAIL')  # Email владельца Drive (ваш Gmail)
 
 # Settings
 REMINDER_DAYS = int(os.getenv('REMINDER_DAYS', 3))
@@ -344,9 +345,26 @@ class DriveManager:
 
         folder = self.service.files().create(
             body=file_metadata,
-            fields='id, webViewLink',
-            supportsAllDrives=True
+            fields='id, webViewLink'
         ).execute()
+
+        # Передаём владение папкой владельцу Drive, чтобы использовать его квоту
+        if DRIVE_OWNER_EMAIL:
+            try:
+                permission = {
+                    'type': 'user',
+                    'role': 'owner',
+                    'emailAddress': DRIVE_OWNER_EMAIL
+                }
+                self.service.permissions().create(
+                    fileId=folder['id'],
+                    body=permission,
+                    transferOwnership=True
+                ).execute()
+                logger.info(f"Transferred ownership of folder '{name}' to {DRIVE_OWNER_EMAIL}")
+            except Exception as e:
+                logger.warning(f"Failed to transfer ownership: {e}")
+
         logger.info(f"Created folder: {name}")
         return folder
 
@@ -399,8 +417,7 @@ class DriveManager:
         file = self.service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id, name, webViewLink, size',
-            supportsAllDrives=True
+            fields='id, name, webViewLink, size'
         ).execute()
         logger.info(f"Uploaded file: {filename}")
         return file
@@ -416,16 +433,14 @@ class DriveManager:
             file = self.service.files().update(
                 fileId=existing['id'],
                 media_body=media,
-                fields='id, name, webViewLink, size',
-                supportsAllDrives=True
+                fields='id, name, webViewLink, size'
             ).execute()
             logger.info(f"Updated text file: {filename}")
         else:
             file = self.service.files().create(
                 body=file_metadata,
                 media_body=media,
-                fields='id, name, webViewLink, size',
-                supportsAllDrives=True
+                fields='id, name, webViewLink, size'
             ).execute()
             logger.info(f"Created text file: {filename}")
 
@@ -671,12 +686,23 @@ async def show_checklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     message += f"\n💡 <i>Натисніть на документ нижче, щоб завантажити</i>"
 
-    keyboard = []
+    # Создаём кнопки и группируем их по 2 в строке
+    buttons = []
     for doc_key, doc_info in DOCUMENT_TYPES.items():
         emoji = doc_info['emoji']
         name = doc_info.get('short', doc_info['name'])
-        button_text = f"✅ {emoji} {name}" if doc_key in uploaded_types else f"{emoji} {name}"
-        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"{CALLBACK_UPLOAD_PREFIX}{doc_key}")])
+        # Меняем emoji с обычного на ✅ после загрузки
+        if doc_key in uploaded_types:
+            button_text = f"✅ {name}"
+        else:
+            button_text = f"{emoji} {name}"
+        buttons.append(InlineKeyboardButton(button_text, callback_data=f"{CALLBACK_UPLOAD_PREFIX}{doc_key}"))
+
+    # Группируем кнопки по 2 в строке
+    keyboard = []
+    for i in range(0, len(buttons), 2):
+        row = buttons[i:i+2]
+        keyboard.append(row)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -755,8 +781,39 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Пароль ЕЦП
     if doc_info.get('is_text') and update.message.text:
         password = update.message.text.strip()
-        context.user_data['ec_password'] = password
-        await update.message.reply_text(f"✅ Пароль збережено!\n\nНатисніть \"✅ Готово\" для завершення.")
+
+        # Показываем сообщение о загрузке
+        loading_msg = await update.message.reply_text("⏳ Очікуйте, зберігаємо пароль...")
+
+        try:
+            # Создаём папки и сохраняем пароль сразу
+            folders = drive.create_client_folder_structure(client['full_name'], client['phone'])
+            personal_folder_id = folders['personal']['id']
+            drive.create_text_file(password, 'Пароль_ЕЦП.txt', personal_folder_id)
+
+            # Сохраняем в базу
+            db.save_ec_password(client['id'], password)
+            db.update_last_activity(client['id'])
+
+            # Удаляем сообщение о загрузке
+            await loading_msg.delete()
+
+            await update.message.reply_text(
+                f"✅ Пароль від ЕЦП збережено!\n\n"
+                f"Натисніть \"✅ Готово\" для завершення або надішліть ще документи."
+            )
+
+            # Помечаем как завершённое
+            context.user_data.pop('uploading_doc_type', None)
+            context.user_data.pop('ec_password', None)
+
+        except Exception as e:
+            logger.error(f"Error saving password: {e}")
+            await loading_msg.delete()
+            await update.message.reply_text(
+                f"❌ Помилка збереження пароля: {str(e)}\n"
+                f"Спробуйте ще раз."
+            )
         return
 
     if not update.message.document and not update.message.photo:
@@ -772,6 +829,9 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         file = update.message.photo[-1]
         file_name = f"photo_{file.file_id}.jpg"
+
+    # Показываем сообщение о загрузке
+    loading_msg = await update.message.reply_text("⏳ Очікуйте, завантажуємо документи...")
 
     try:
         tg_file = await context.bot.get_file(file.file_id)
@@ -800,6 +860,9 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
             context.user_data['uploaded_files'] = []
         context.user_data['uploaded_files'].append(file_name)
 
+        # Удаляем сообщение о загрузке
+        await loading_msg.delete()
+
         count = len(context.user_data['uploaded_files'])
         await update.message.reply_text(
             f"✅ Файл завантажено: {file_name}\n"
@@ -809,6 +872,8 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     except Exception as e:
         logger.error(f"Error uploading file: {e}")
+        # Удаляем сообщение о загрузке в случае ошибки
+        await loading_msg.delete()
         await update.message.reply_text(
             f"❌ Помилка завантаження файлу: {str(e)}\n"
             f"Спробуйте ще раз або зв'яжіться з менеджером."
@@ -943,7 +1008,7 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message += f"🔄 Статус: {client['status']}\n\n"
 
     if client['drive_folder_url']:
-        message += f"📁 [Папка на Google Drive]({client['drive_folder_url']})\n\n"
+        message += f"📁 <a href=\"{client['drive_folder_url']}\">Папка на Google Drive</a>\n\n"
 
     message += "📋 Чек-лист документов:\n\n"
 
@@ -966,7 +1031,7 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message += f"\n📈 Прогресс: {uploaded_count}/{total_types} типов документов\n"
     message += f"📎 Всего файлов: {total_files}"
 
-    await update.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
+    await update.message.reply_text(message, parse_mode='HTML', disable_web_page_preview=True)
 
 # ============================================================================
 # MAIN

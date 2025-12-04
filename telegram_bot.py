@@ -827,9 +827,11 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         # Для множественных файлов добавляем номер
         if doc_info.get('multiple'):
-            # Считаем сколько файлов этого типа уже загружено
-            uploaded_count = len(context.user_data.get('uploaded_files', []))
-            file_number = uploaded_count + 1
+            # Считаем сколько файлов этого типа УЖЕ ЗАГРУЖЕНО В БАЗУ (не в сессии!)
+            query = "SELECT COUNT(*) as count FROM docbot.documents WHERE client_id = %s AND document_type = %s"
+            result = db.execute(query, (client['id'], doc_key), fetch=True)
+            existing_count = result[0]['count'] if result else 0
+            file_number = existing_count + 1
             new_file_name = f"{doc_type_name}_{short_name}_{file_number}{file_ext}"
         else:
             # Для одиночных файлов без номера
@@ -877,7 +879,18 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         message += f"📊 Завантажено файлів: {count}\n\n"
         message += "Надішліть ще файли або натисніть \"✅ Готово\" для завершення."
 
-        await update.message.reply_text(message)
+        # Редактируем существующее сообщение или создаём новое
+        if 'upload_status_message' in context.user_data:
+            try:
+                await context.user_data['upload_status_message'].edit_text(message)
+            except:
+                # Если не получилось отредактировать, создаём новое
+                msg = await update.message.reply_text(message)
+                context.user_data['upload_status_message'] = msg
+        else:
+            # Первый файл - создаём сообщение
+            msg = await update.message.reply_text(message)
+            context.user_data['upload_status_message'] = msg
 
     except Exception as e:
         logger.error(f"Error uploading file: {e}")
@@ -908,12 +921,21 @@ async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if doc_info.get('is_text'):
         password = context.user_data.get('ec_password')
         if password:
-            db.save_ec_password(client['id'], password)
-            folders = drive.create_client_folder_structure(client['full_name'], client['phone'])
-            personal_folder_id = folders['personal']['id']
-            drive.create_text_file(password, 'Пароль_ЕЦП.txt', personal_folder_id)
-            db.update_last_activity(client['id'])
-            message = f"✅ Пароль від ЕЦП збережено!"
+            try:
+                # Сохраняем пароль в БД
+                password_id = db.save_ec_password(client['id'], password)
+                logger.info(f"ECP password saved to DB: password_id={password_id}, client_id={client['id']}")
+
+                # Сохраняем на Drive
+                folders = drive.create_client_folder_structure(client['full_name'], client['phone'])
+                personal_folder_id = folders['personal']['id']
+                drive.create_text_file(password, 'Пароль_ЕЦП.txt', personal_folder_id)
+
+                db.update_last_activity(client['id'])
+                message = f"✅ Пароль від ЕЦП збережено!"
+            except Exception as e:
+                logger.error(f"Error saving ECP password: {e}")
+                message = f"❌ Помилка збереження пароля: {str(e)}"
         else:
             message = "⚠️ Ви не надіслали пароль. Спробуйте ще раз."
             context.user_data.pop('uploading_doc_type', None)
@@ -933,6 +955,7 @@ async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop('uploading_doc_type', None)
     context.user_data.pop('uploaded_files', None)
     context.user_data.pop('ec_password', None)
+    context.user_data.pop('upload_status_message', None)
 
     uploaded_types = db.get_uploaded_types(client['id'])
     has_ecpass = db.get_ec_password(client['id']) is not None

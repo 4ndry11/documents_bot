@@ -659,7 +659,11 @@ async def show_checklist(update: Update, context: ContextTypes.DEFAULT_TYPE, for
     required_count = len(REQUIRED_DOCUMENTS)
     uploaded_required_count = sum(1 for doc in REQUIRED_DOCUMENTS if doc in uploaded_types)
 
+    # Прогрес-бар
+    progress_bar = get_progress_bar(uploaded_required_count, required_count)
+
     message = f"📋 <b>Ваш прогрес: {uploaded_required_count}/{required_count} обов'язкових документів</b>\n\n"
+    message += f"{progress_bar}\n\n"
     message += "<b>Обов'язкові документи:</b>\n"
 
     for doc_key in REQUIRED_DOCUMENTS:
@@ -750,25 +754,20 @@ async def handle_upload_request(update: Update, context: ContextTypes.DEFAULT_TY
         doc_title = doc_info.get('description', doc_info['name'])
         message = f"{doc_info['emoji']} <b>{doc_title}</b>\n\n"
         if doc_info.get('multiple'):
-            message += (
-                f"📎 Надішліть файл(и) документів.\n"
-                f"Ви можете надіслати кілька файлів (до 70).\n\n"
-                f"Після завантаження всіх файлів натисніть кнопку \"✅ Готово\"."
-            )
+            message += f"📎 Надішліть файл(и) документів.\n"
         else:
-            message += (
-                f"📎 Надішліть файл документа.\n\n"
-                f"Після завантаження натисніть кнопку \"✅ Готово\"."
-            )
+            message += f"📎 Надішліть файл документа.\n"
 
         await query.edit_message_text(
             message,
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Готово", callback_data=CALLBACK_DONE),
                 InlineKeyboardButton("« Назад", callback_data=CALLBACK_BACK)
             ]])
         )
+
+        # Зберігаємо message_id для подальшого видалення
+        context.user_data['upload_instruction_message_id'] = query.message.message_id
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка текстовых сообщений (только для пароля ЕЦП)"""
@@ -879,11 +878,26 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         file = update.message.photo[-1]
         original_file_name = f"photo_{file.file_id}.jpg"
 
-    # Показываем сообщение о загрузке только для первого файла
-    if 'uploaded_files' not in context.user_data or len(context.user_data['uploaded_files']) == 0:
-        loading_msg = await update.message.reply_text("⏳ Очікуйте, завантажуємо документи...")
-    else:
-        loading_msg = None
+    # Видаляємо попереднє повідомлення з інструкцією (перший раз)
+    if 'upload_instruction_message_id' in context.user_data:
+        try:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=context.user_data['upload_instruction_message_id']
+            )
+            context.user_data.pop('upload_instruction_message_id')
+        except:
+            pass
+
+    # Видаляємо попереднє повідомлення зі статусом
+    if 'upload_status_message' in context.user_data:
+        try:
+            await context.user_data['upload_status_message'].delete()
+        except:
+            pass
+
+    # Показываем сообщение о загрузке
+    loading_msg = await update.message.reply_text("⏳ Обробляю файли...")
 
     try:
         # Получаем расширение файла
@@ -933,35 +947,31 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         if 'uploaded_files' not in context.user_data:
             context.user_data['uploaded_files'] = []
-        context.user_data['uploaded_files'].append(new_file_name)
+        context.user_data['uploaded_files'].append({'name': new_file_name, 'status': '✅'})
 
-        # Удаляем сообщение о загрузке только если оно было создано
-        if loading_msg:
-            await loading_msg.delete()
+        # Удаляем сообщение о загрузке
+        await loading_msg.delete()
 
-        # Формируем ОДНО сообщение со списком всех загруженных файлов
+        # Формируем сообщение со списком всех загруженных файлов
         uploaded_files = context.user_data['uploaded_files']
         count = len(uploaded_files)
 
-        message = ""
-        for file_name in uploaded_files:
-            message += f"✅ Файл завантажено: {file_name}\n"
+        message = f"✅ <b>Завантажено файлів: {count}</b>\n\n"
+        for idx, file_info in enumerate(uploaded_files, 1):
+            message += f"{idx}. {file_info['name']} — {file_info['status']}\n"
 
-        message += f"📊 Завантажено файлів: {count}\n\n"
-        message += "Надішліть ще файли або натисніть \"✅ Готово\" для завершення."
+        message += f"\n💡 Надішліть ще файли або натисніть \"Готово\""
 
-        # Редактируем существующее сообщение или создаём новое
-        if 'upload_status_message' in context.user_data:
-            try:
-                await context.user_data['upload_status_message'].edit_text(message)
-            except:
-                # Если не получилось отредактировать, создаём новое
-                msg = await update.message.reply_text(message)
-                context.user_data['upload_status_message'] = msg
-        else:
-            # Первый файл - создаём сообщение
-            msg = await update.message.reply_text(message)
-            context.user_data['upload_status_message'] = msg
+        # Создаём новое сообщение с кнопкой "Готово" внизу
+        msg = await update.message.reply_text(
+            message,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Готово", callback_data=CALLBACK_DONE),
+                InlineKeyboardButton("« Назад", callback_data=CALLBACK_BACK)
+            ]])
+        )
+        context.user_data['upload_status_message'] = msg
 
     except Exception as e:
         logger.error(f"Error uploading file: {e}")
@@ -994,9 +1004,11 @@ async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         # Показываем список загруженных файлов
         uploaded_files = context.user_data.get('uploaded_files', [])
-        message = f"✅ Завантажено файлів: {uploaded_count}\n\n"
+        message = f"🎉 <b>Документ додано!</b>\n\n"
+        message += f"✅ Завантажено файлів: {uploaded_count}\n\n"
         message += "📎 <b>Список файлів:</b>\n"
-        for idx, file_name in enumerate(uploaded_files, 1):
+        for idx, file_info in enumerate(uploaded_files, 1):
+            file_name = file_info['name'] if isinstance(file_info, dict) else file_info
             message += f"{idx}. {file_name}\n"
 
     context.user_data.pop('uploading_doc_type', None)
@@ -1012,7 +1024,10 @@ async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     required_uploaded = sum(1 for doc in REQUIRED_DOCUMENTS if doc in uploaded_types)
     required_total = len(REQUIRED_DOCUMENTS)
 
-    message += f"\n\n📊 Прогрес: {required_uploaded}/{required_total} обов'язкових документів"
+    # Додаємо прогрес-бар
+    progress_bar = get_progress_bar(required_uploaded, required_total)
+    message += f"\n\n📊 <b>Ваш прогрес: {required_uploaded}/{required_total} обов'язкових документів</b>\n\n"
+    message += f"{progress_bar}"
 
     if required_uploaded == required_total:
         db.update_client_status(client['id'], 'completed')
@@ -1029,7 +1044,7 @@ async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅ Всі обов'язкові документи успішно завантажено!\n\n"
             "🎁 <b>Ви отримали бонус від компанії!</b>\n"
             "Зв'яжіться з менеджером для отримання подарунка.\n\n"
-            "Дякуємо за вашу наполегливість! 💪"
+            "💪 Дякуємо за вашу наполегливість!"
         )
         await notify_admins(
             f"🎉 Клієнт завершив збір документів!\n\n"
@@ -1037,7 +1052,17 @@ async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📱 {client['phone']}"
         )
     else:
-        message += "\n\nПродовжуйте - залишилось небагато! 🚀"
+        # Мотивуюче повідомлення залежно від прогресу
+        remaining = required_total - required_uploaded
+        if remaining == 1:
+            message += "\n\n🔥 <b>Залишився всього 1 документ!</b> Ви майже у фінішній прямій! 🚀"
+        elif remaining == 2:
+            message += "\n\n💪 <b>Залишилось 2 документи!</b> Продовжуйте, ви чудово справляєтесь! ⭐"
+        elif remaining <= 4:
+            message += f"\n\n✨ <b>Залишилось {remaining} документи!</b> Ще трохи і все готово! 🎯"
+        else:
+            message += f"\n\n🚀 <b>Чудова робота!</b> Продовжуйте у тому ж дусі! 💪"
+
         await notify_admins(
             f"📄 Клієнт завантажив документ\n\n"
             f"👤 {client['full_name']}\n"
@@ -1061,6 +1086,16 @@ async def handle_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop('uploaded_files', None)
     context.user_data.pop('ec_password', None)
     await show_checklist(update, context)
+
+def get_progress_bar(current, total, length=20):
+    """Створити візуальний прогрес-бар"""
+    if total == 0:
+        return "░" * length + " 0%"
+    filled = int(length * current / total)
+    empty = length - filled
+    bar = '█' * filled + '░' * empty
+    percentage = int(100 * current / total)
+    return f"{bar} {percentage}%"
 
 def get_main_keyboard():
     keyboard = [[KeyboardButton("📋 Чек-лист документів")]]

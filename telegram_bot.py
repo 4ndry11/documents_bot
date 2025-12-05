@@ -79,14 +79,16 @@ DOCUMENT_TYPES = {
         'short': 'ЕЦП',
         'emoji': '📜',
         'folder': 'personal',
-        'required': True
+        'required': True,
+        'video': 'https://www.youtube.com/watch?v=S5OTYY9hyQY'
     },
     'passport': {
         'name': 'Сканкопія паспорта та РНОКПП (ІПН)',
         'short': 'Паспорт',
         'emoji': '📕',
         'folder': 'personal',
-        'required': True
+        'required': True,
+        'video': 'https://www.youtube.com/shorts/QMyoYlybUOk'
     },
     'registration': {
         'name': 'Витяг з реєстру територіальної громади',
@@ -94,14 +96,16 @@ DOCUMENT_TYPES = {
         'description': 'Довідка про склад сім\'ї (витяг з реєстру територіальної громади)',
         'emoji': '🏠',
         'folder': 'personal',
-        'required': True
+        'required': True,
+        'video': 'https://www.youtube.com/shorts/9C5XE1gpGNM'
     },
     'workbook': {
         'name': 'Копія трудової книжки',
         'short': 'Трудова книжка',
         'emoji': '📗',
         'folder': 'personal',
-        'required': False
+        'required': False,
+        'video': 'https://www.youtube.com/shorts/xB-xZUD_yu8'
     },
     'credit_contracts': {
         'name': 'Кредитні договори',
@@ -109,35 +113,40 @@ DOCUMENT_TYPES = {
         'emoji': '📑',
         'folder': 'credit',
         'required': True,
-        'multiple': True
+        'multiple': True,
+        'video': 'https://www.youtube.com/shorts/vhOq-iw_B0A'
     },
     'bank_statements': {
         'name': 'Виписки про залишок коштів на рахунках',
         'short': 'Виписки',
         'emoji': '🏦',
         'folder': 'personal',
-        'required': True
+        'required': True,
+        'video': 'https://www.youtube.com/shorts/5yzLPrDhImo'
     },
     'expenses': {
         'name': 'Підтвердження витрат за останні місяці',
         'short': 'Витрати',
         'emoji': '💰',
         'folder': 'personal',
-        'required': True
+        'required': True,
+        'video': 'https://www.youtube.com/shorts/5yzLPrDhImo'
     },
     'story': {
         'name': 'Ваша історія (у форматі Word)',
         'short': 'Історія',
         'emoji': '📝',
         'folder': 'personal',
-        'required': True
+        'required': True,
+        'video': 'https://www.youtube.com/shorts/KkFbbSkF6Jg'
     },
     'family_income': {
         'name': 'Доходи членів сім\'ї (довідка з податкової)',
         'short': 'Доходи членів сім\'ї',
         'emoji': '💵',
         'folder': 'personal',
-        'required': False
+        'required': False,
+        'video': 'https://www.youtube.com/watch?v=fqhRCe-cMAc'
     },
     'debt_certificates': {
         'name': 'Довідки про стан заборгованості',
@@ -479,6 +488,103 @@ db = Database()
 drive = DriveManager()
 notification_bot = None
 
+# Словник для зберігання message_id чек-листів клієнтів
+# client_telegram_id -> (chat_id, message_id)
+client_checklist_messages = {}
+
+async def update_client_checklist(client_id, bot):
+    """Оновити чек-лист клієнта (якщо він відкритий)"""
+    try:
+        client = db.get_client_by_id(client_id)
+        if not client or not client.get('telegram_id') or client['telegram_id'] == 0:
+            return  # Клієнт не має telegram_id (створений адміном)
+
+        telegram_id = client['telegram_id']
+        if telegram_id not in client_checklist_messages:
+            return  # Чек-лист не відкритий
+
+        chat_id, message_id = client_checklist_messages[telegram_id]
+
+        # Формуємо оновлений чек-лист
+        uploaded_types = db.get_uploaded_types(client['id'])
+        has_ecpass = db.get_ec_password(client['id']) is not None
+        if has_ecpass and 'ecpass' not in uploaded_types:
+            uploaded_types['ecpass'] = 1
+
+        required_count = len(REQUIRED_DOCUMENTS)
+        uploaded_required_count = sum(1 for doc in REQUIRED_DOCUMENTS if doc in uploaded_types)
+
+        # Прогрес-бар
+        progress_bar = get_progress_bar(uploaded_required_count, required_count)
+
+        message = f"📋 <b>Ваш прогрес: {uploaded_required_count}/{required_count} обов'язкових документів</b>\n\n"
+        message += f"{progress_bar}\n\n"
+        message += "<b>Обов'язкові документи:</b>\n"
+
+        for doc_key in REQUIRED_DOCUMENTS:
+            doc_info = DOCUMENT_TYPES[doc_key]
+            emoji = doc_info['emoji']
+            name = doc_info.get('short', doc_info['name'])
+
+            if doc_key in uploaded_types:
+                count = uploaded_types[doc_key]
+                if doc_info.get('multiple'):
+                    message += f"✅ {emoji} {name} ({count} файл(ів))\n"
+                else:
+                    message += f"✅ {emoji} {name}\n"
+            else:
+                message += f"❌ {emoji} {name}\n"
+
+        optional_docs = [k for k in DOCUMENT_TYPES.keys() if k not in REQUIRED_DOCUMENTS]
+        if optional_docs:
+            message += f"\n<b>Додаткові документи:</b>\n"
+            for doc_key in optional_docs:
+                doc_info = DOCUMENT_TYPES[doc_key]
+                emoji = doc_info['emoji']
+                name = doc_info.get('short', doc_info['name'])
+
+                if doc_key in uploaded_types:
+                    count = uploaded_types[doc_key]
+                    message += f"✅ {emoji} {name} ({count})\n"
+                else:
+                    message += f"⚪️ {emoji} {name}\n"
+
+        message += f"\n💡 <i>Натисніть на документ нижче, щоб завантажити</i>"
+
+        # Створюємо кнопки
+        buttons = []
+        for doc_key, doc_info in DOCUMENT_TYPES.items():
+            emoji = doc_info['emoji']
+            name = doc_info.get('short', doc_info['name'])
+            if doc_key in uploaded_types:
+                button_text = f"✅ {name}"
+            else:
+                button_text = f"{emoji} {name}"
+            buttons.append(InlineKeyboardButton(button_text, callback_data=f"{CALLBACK_UPLOAD_PREFIX}{doc_key}"))
+
+        keyboard = []
+        for i in range(0, len(buttons), 2):
+            row = buttons[i:i+2]
+            keyboard.append(row)
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Оновлюємо повідомлення
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=message,
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+        logger.info(f"Updated checklist for client {client_id} (telegram_id={telegram_id})")
+
+    except Exception as e:
+        logger.error(f"Error updating client checklist: {e}")
+        # Видаляємо з словника якщо не вдалось оновити (повідомлення вже не існує)
+        if telegram_id in client_checklist_messages:
+            client_checklist_messages.pop(telegram_id)
+
 def normalize_phone(phone):
     digits = ''.join(filter(str.isdigit, phone))
     if len(digits) == 10:
@@ -705,7 +811,7 @@ async def show_checklist(update: Update, context: ContextTypes.DEFAULT_TYPE, for
 
     optional_docs = [k for k in DOCUMENT_TYPES.keys() if k not in REQUIRED_DOCUMENTS]
     if optional_docs:
-        message += f"\n<b>Додаткові документи (необов'язкові):</b>\n"
+        message += f"\n<b>Додаткові документи:</b>\n"
         for doc_key in optional_docs:
             doc_info = DOCUMENT_TYPES[doc_key]
             emoji = doc_info['emoji']
@@ -741,12 +847,18 @@ async def show_checklist(update: Update, context: ContextTypes.DEFAULT_TYPE, for
 
     if query and not force_new_message:
         await query.answer()
-        await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        sent_msg = await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        # Зберігаємо message_id для оновлення (тільки для реальних клієнтів, не адмінів)
+        if not admin_id and client.get('telegram_id'):
+            client_checklist_messages[client['telegram_id']] = (update.effective_chat.id, query.message.message_id)
     else:
         # Отправляем новое сообщение (либо нет query, либо force_new_message=True)
         if query:
             await query.answer()
-        await update.effective_chat.send_message(message, parse_mode='HTML', reply_markup=reply_markup)
+        sent_msg = await update.effective_chat.send_message(message, parse_mode='HTML', reply_markup=reply_markup)
+        # Зберігаємо message_id для оновлення (тільки для реальних клієнтів, не адмінів)
+        if not admin_id and client.get('telegram_id'):
+            client_checklist_messages[client['telegram_id']] = (update.effective_chat.id, sent_msg.message_id)
 
 async def handle_upload_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -781,12 +893,17 @@ async def handle_upload_request(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             message += f"📎 Надішліть файл документа.\n"
 
+        # Добавляем видео-ссылку если есть
+        if doc_info.get('video'):
+            message += f"\n📺 <a href=\"{doc_info['video']}\">Відео-інструкція: як отримати цей документ</a>"
+
         await query.edit_message_text(
             message,
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("« Назад", callback_data=CALLBACK_BACK)
-            ]])
+            ]]),
+            disable_web_page_preview=True
         )
 
         # Зберігаємо message_id для подальшого видалення
@@ -970,6 +1087,10 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         db.update_last_activity(client['id'])
         os.remove(temp_path)
+
+        # Оновлюємо чек-лист клієнта (якщо адмін завантажує за клієнта)
+        if admin_id:
+            await update_client_checklist(client['id'], context.bot)
 
         if 'uploaded_files' not in context.user_data:
             context.user_data['uploaded_files'] = []

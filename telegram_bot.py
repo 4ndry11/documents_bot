@@ -1696,14 +1696,16 @@ async def declaration_handle_files(update: Update, context: ContextTypes.DEFAULT
             temp_path = os.path.join(tempfile.gettempdir(), file.file_name)
             await tg_file.download_to_drive(temp_path)
 
-            # Створюємо папку "Декларація" на Drive
+            # Отримуємо або створюємо папку клієнта
             folders = drive.create_client_folder_structure(client['full_name'], client['phone'])
 
-            # Перевіряємо чи є папка "Декларація", якщо ні - створюємо
-            declaration_folder_id = None
-            parent_folder_id = folders['client']['id']  # Виправлено: client замість root
+            # Перевіряємо що папка клієнта існує
+            if not folders or 'client' not in folders or not folders['client']:
+                raise Exception("Не вдалося знайти або створити папку клієнта на Drive")
 
-            # Шукаємо папку "Декларація"
+            parent_folder_id = folders['client']['id']
+
+            # Шукаємо папку "Декларація" всередині папки клієнта
             existing_folders = drive.service.files().list(
                 q=f"name='Декларація' and '{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
                 fields='files(id, name)'
@@ -1712,7 +1714,7 @@ async def declaration_handle_files(update: Update, context: ContextTypes.DEFAULT
             if existing_folders:
                 declaration_folder_id = existing_folders[0]['id']
             else:
-                # Створюємо папку
+                # Створюємо папку "Декларація" якщо її немає
                 folder_metadata = {
                     'name': 'Декларація',
                     'mimeType': 'application/vnd.google-apps.folder',
@@ -1723,6 +1725,7 @@ async def declaration_handle_files(update: Update, context: ContextTypes.DEFAULT
                     fields='id'
                 ).execute()
                 declaration_folder_id = folder['id']
+                logger.info(f"Created 'Декларація' folder for client {client['full_name']}")
 
             # Завантажуємо файл
             drive_file = drive.upload_file(temp_path, declaration_folder_id, file.file_name)
@@ -1851,10 +1854,16 @@ async def declaration_complete(update: Update, context: ContextTypes.DEFAULT_TYP
         with open(temp_path, 'w', encoding='utf-8') as f:
             f.write(content)
 
-        # Отримуємо або створюємо папку "Декларація"
+        # Отримуємо або створюємо папку клієнта та підпапку "Декларація"
         folders = drive.create_client_folder_structure(client['full_name'], client['phone'])
-        parent_folder_id = folders['client']['id']  # Виправлено: client замість root
 
+        # Перевіряємо що папка клієнта існує
+        if not folders or 'client' not in folders or not folders['client']:
+            raise Exception("Не вдалося знайти або створити папку клієнта на Drive")
+
+        parent_folder_id = folders['client']['id']
+
+        # Шукаємо папку "Декларація" всередині папки клієнта
         existing_folders = drive.service.files().list(
             q=f"name='Декларація' and '{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
             fields='files(id, name)'
@@ -1863,6 +1872,7 @@ async def declaration_complete(update: Update, context: ContextTypes.DEFAULT_TYP
         if existing_folders:
             declaration_folder_id = existing_folders[0]['id']
         else:
+            # Створюємо папку "Декларація" якщо її немає
             folder_metadata = {
                 'name': 'Декларація',
                 'mimeType': 'application/vnd.google-apps.folder',
@@ -1873,6 +1883,7 @@ async def declaration_complete(update: Update, context: ContextTypes.DEFAULT_TYP
                 fields='id'
             ).execute()
             declaration_folder_id = folder['id']
+            logger.info(f"Created 'Декларація' folder for client {client['full_name']}")
 
         # Завантажуємо файл
         file_name = f"Анкета_{client['full_name']}.txt"

@@ -167,6 +167,117 @@ DOCUMENT_TYPES = {
 REQUIRED_DOCUMENTS = [key for key, val in DOCUMENT_TYPES.items() if val.get('required', False)]
 
 # ============================================================================
+# ПИТАННЯ АНКЕТИ ДЕКЛАРАЦІЇ
+# ============================================================================
+
+DECLARATION_QUESTIONS = [
+    {
+        'key': 'email_password',
+        'emoji': '📧',
+        'question': 'Ваша електронна пошта та пароль яку вказували під час оформлення кредитів у разі втрати доступу - до діючої.',
+        'required': True
+    },
+    {
+        'key': 'living_address_2022_2025',
+        'emoji': '🏠',
+        'question': 'Адреса фактичного місця проживання з 2022 по 2025 рік',
+        'hint': 'Якщо фактично 2022-2024 не проживали за місцем реєстрації, напишіть адреси, де проживали по роках конкретно; та адресу місця проживання за 2025 рік.',
+        'required': True
+    },
+    {
+        'key': 'registration_change',
+        'emoji': '📍',
+        'question': 'Якщо була зміна адреси реєстрації (прописки) у 2022–2025 то вкажіть стару адресу та дату зміни',
+        'required': False
+    },
+    {
+        'key': 'property_alienation_self',
+        'emoji': '🏡',
+        'question': 'Опишіть чи було відчуження (дарування, продаж і т.д.) майна у вас у 2022–2025 роках. Якщо було - вкажіть деталі (що, коли, кому). Якщо не було - напишіть "Ні".',
+        'required': True
+    },
+    {
+        'key': 'property_alienation_family',
+        'emoji': '👨‍👩‍👧',
+        'question': 'Опишіть чи було відчуження майна у членів вашої сім\'ї у 2022–2025 роках. Якщо було - вкажіть деталі (хто, що, коли). Якщо не було - напишіть "Ні".',
+        'required': True
+    },
+    {
+        'key': 'family_vehicles',
+        'emoji': '🚗',
+        'question': 'Опишіть чи є у членів сім\'ї транспортні засоби у власності. Якщо так - вкажіть марку, рік, на кого зареєстровано. Якщо ні - напишіть "Ні".',
+        'required': True
+    },
+    {
+        'key': 'corporate_rights',
+        'emoji': '📊',
+        'question': 'Опишіть чи є у вас зараз або були у 2022-2024 роках корпоративні права, акції, цінні папери у власності. Якщо так - вкажіть деталі. Якщо ні - напишіть "Ні".',
+        'required': True
+    },
+    {
+        'key': 'crypto_foreign_credits',
+        'emoji': '💱',
+        'question': 'Опишіть чи є у вас кредити у криптовалюті або іноземній валюті. Якщо так - вкажіть деталі (сума, валюта, кредитор). Якщо ні - напишіть "Ні".',
+        'required': True
+    },
+    {
+        'key': 'specific_bank_credits',
+        'emoji': '💱',
+        'question': 'Опишіть чи є у вас кредит в АТ Ощадбанку, OTP bank або розстрочки від Monobank. Якщо так - вкажіть де саме та суму. Якщо ні - напишіть "Ні".',
+        'required': True
+    },
+    {
+        'key': 'online_betting',
+        'emoji': '🎲',
+        'question': 'Опишіть чи ставили ви коли-небудь ставки онлайн. Якщо так - вкажіть де та коли. Якщо ні - напишіть "Ні".',
+        'required': True
+    },
+    {
+        'key': 'bank_installments',
+        'emoji': '💳',
+        'question': 'Опишіть чи були у вас розстрочки в банках. Якщо так - вкажіть в яких банках та на що. Якщо ні - напишіть "Ні".',
+        'required': True
+    },
+    {
+        'key': 'creditor_address',
+        'emoji': '📌',
+        'question': 'Яка адреса вказувалася кредиторам (не нова, не чиста)?',
+        'required': True
+    },
+    {
+        'key': 'housing_owner',
+        'emoji': '🏠',
+        'question': 'Хто є власником житла, в якому ви зареєстровані/проживаєте?',
+        'required': True
+    },
+    {
+        'key': 'marriage_transactions',
+        'emoji': '💍',
+        'question': 'Опишіть чи куплялося/продавалося щось у шлюбі. Якщо так - вкажіть що саме та коли. Якщо ні або не перебуваєте в шлюбі - напишіть "Ні".',
+        'required': True
+    },
+    {
+        'key': 'alienation_documents',
+        'emoji': '📑',
+        'question': 'Якщо було відчуження майна — завантажте документи (договори купівлі/продажу, дарування тощо)',
+        'type': 'files',
+        'required': False
+    },
+    {
+        'key': 'vehicle_power_of_attorney',
+        'emoji': '🚘',
+        'question': 'Якщо авто досі зареєстроване на вас, але продане по довіреності - напишіть про це.',
+        'required': False
+    },
+    {
+        'key': 'alimony_info',
+        'emoji': '❗',
+        'question': 'Опишіть чи отримуєте аліменти на дітей/сплачуєте аліменти/маєте заборгованість по аліментах. Якщо так - вкажіть деталі. Якщо ні - напишіть "Ні". Можете пропустити це питання.',
+        'required': False
+    }
+]
+
+# ============================================================================
 # LOGGING
 # ============================================================================
 
@@ -327,6 +438,35 @@ class Database:
         cutoff_date = datetime.now() - timedelta(days=REMINDER_DAYS)
         return self.execute(query, (cutoff_date,), fetch=True)
 
+    # Declarations
+    def get_or_create_declaration(self, client_id):
+        """Отримати існуючу декларацію або створити нову"""
+        query = "SELECT * FROM docbot.declarations WHERE client_id = %s"
+        result = self.execute(query, (client_id,), fetch=True)
+        if result:
+            return result[0]
+
+        # Створюємо нову декларацію
+        query = "INSERT INTO docbot.declarations (client_id) VALUES (%s) RETURNING *"
+        result = self.execute(query, (client_id,), fetch=True)
+        return result[0] if result else None
+
+    def update_declaration_answer(self, client_id, field_name, answer):
+        """Оновити відповідь на питання в декларації"""
+        query = f"UPDATE docbot.declarations SET {field_name} = %s WHERE client_id = %s"
+        self.execute(query, (answer, client_id))
+
+    def complete_declaration(self, client_id):
+        """Позначити декларацію як завершену"""
+        query = "UPDATE docbot.declarations SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE client_id = %s"
+        self.execute(query, (client_id,))
+
+    def get_declaration(self, client_id):
+        """Отримати декларацію клієнта"""
+        query = "SELECT * FROM docbot.declarations WHERE client_id = %s"
+        result = self.execute(query, (client_id,), fetch=True)
+        return result[0] if result else None
+
 # ============================================================================
 # GOOGLE DRIVE
 # ============================================================================
@@ -479,10 +619,15 @@ class DriveManager:
 # Стани
 WAITING_NAME, WAITING_PHONE = range(2)
 
+# Стани для анкети декларації
+(DECL_START, DECL_QUESTION, DECL_FILES) = range(3)
+
 # Callback data
 CALLBACK_UPLOAD_PREFIX = "upload_"
 CALLBACK_DONE = "done"
 CALLBACK_BACK = "back"
+CALLBACK_DECL_START = "decl_start"
+CALLBACK_DECL_SKIP = "decl_skip"
 
 db = Database()
 drive = DriveManager()
@@ -1284,8 +1429,443 @@ def get_progress_bar(current, total, length=20):
     return f"{bar} {percentage}%"
 
 def get_main_keyboard():
-    keyboard = [[KeyboardButton("📋 Чек-лист документів")]]
+    keyboard = [
+        [KeyboardButton("📋 Чек-лист документів")],
+        [KeyboardButton("📋 Анкета декларації")]
+    ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# ============================================================================
+# DECLARATION FORM HANDLERS
+# ============================================================================
+
+async def declaration_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка натискання кнопки 'Анкета декларації'"""
+    client, admin_id = get_active_client(update, context)
+
+    if not client:
+        await update.message.reply_text("❌ Спочатку зареєструйтесь: /start")
+        return ConversationHandler.END
+
+    # Перевіряємо чи вже є заповнена анкета
+    declaration = db.get_declaration(client['id'])
+    if declaration and declaration['status'] == 'completed':
+        completed_at = declaration['completed_at'].strftime('%d.%m.%Y %H:%M')
+        await update.message.reply_text(
+            f"✅ <b>Ви вже заповнили анкету декларації</b>\n\n"
+            f"📅 Заповнено: {completed_at}\n\n"
+            f"💡 Редагування анкети неможливе. Якщо потрібно внести зміни, "
+            f"зв'яжіться з менеджером.",
+            parse_mode='HTML',
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("📋 Чек-лист документів")]],
+                resize_keyboard=True
+            )
+        )
+        return ConversationHandler.END
+
+    # Показуємо привітання та інструкцію
+    await update.message.reply_text(
+        "📋 <b>Анкета для складання податкової декларації</b>\n\n"
+        "Вам буде задано 17 питань про фінансову діяльність за 2022-2025 роки.\n\n"
+        "⚠️ <b>Важливо:</b>\n"
+        "• Відповідайте максимально детально\n"
+        "• Деякі питання можна пропустити (буде вказано)\n"
+        "• Ви побачите прогрес заповнення\n"
+        "• Після завершення редагування неможливе\n\n"
+        "📝 Готові розпочати?",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Почати заповнення", callback_data=CALLBACK_DECL_START)
+        ]])
+    )
+
+    return DECL_START
+
+async def declaration_begin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Початок заповнення анкети"""
+    query = update.callback_query
+    await query.answer()
+
+    client, admin_id = get_active_client(update, context)
+
+    # Отримуємо або створюємо запис декларації
+    declaration = db.get_or_create_declaration(client['id'])
+
+    # Ініціалізуємо дані для conversation
+    context.user_data['declaration_current_q'] = 0
+    context.user_data['declaration_id'] = declaration['id']
+
+    await query.edit_message_text("🚀 Розпочинаємо заповнення анкети...")
+
+    # Показуємо перше питання
+    await declaration_ask_question(update, context)
+
+    return DECL_QUESTION
+
+async def declaration_ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показати поточне питання"""
+    q_index = context.user_data['declaration_current_q']
+
+    # Якщо всі питання пройдено - завершуємо
+    if q_index >= len(DECLARATION_QUESTIONS):
+        await declaration_complete(update, context)
+        return ConversationHandler.END
+
+    question = DECLARATION_QUESTIONS[q_index]
+    total_questions = len(DECLARATION_QUESTIONS)
+    answered_count = q_index
+
+    # Прогрес-бар
+    progress_bar = get_progress_bar(answered_count, total_questions)
+
+    # Формуємо текст питання
+    message = (
+        f"<b>Питання {q_index + 1} з {total_questions}</b>\n"
+        f"{progress_bar}\n\n"
+        f"{question['emoji']} <b>{question['question']}</b>\n"
+    )
+
+    if question.get('hint'):
+        message += f"\n💡 {question['hint']}\n"
+
+    if not question['required']:
+        message += "\n<i>✓ Це питання можна пропустити</i>"
+
+    # Кнопки
+    buttons = []
+    if not question['required']:
+        buttons.append([InlineKeyboardButton("⏭ Пропустити", callback_data=CALLBACK_DECL_SKIP)])
+
+    keyboard = InlineKeyboardMarkup(buttons) if buttons else None
+
+    # Відправляємо питання
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            message,
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+    else:
+        await update.message.reply_text(
+            message,
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+
+    return DECL_QUESTION if question.get('type') != 'files' else DECL_FILES
+
+async def declaration_receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка текстової відповіді"""
+    client, admin_id = get_active_client(update, context)
+    q_index = context.user_data['declaration_current_q']
+    question = DECLARATION_QUESTIONS[q_index]
+
+    # Якщо це питання з файлами - переходимо до обробки файлів
+    if question.get('type') == 'files':
+        return await declaration_handle_files(update, context)
+
+    # Отримуємо відповідь
+    answer = update.message.text.strip()
+
+    if not answer:
+        await update.message.reply_text("❌ Будь ласка, введіть відповідь або пропустіть питання.")
+        return DECL_QUESTION
+
+    # Зберігаємо відповідь у БД
+    db.update_declaration_answer(client['id'], question['key'], answer)
+
+    # Логуємо
+    db.log_notification(
+        client_id=client['id'],
+        notification_type='declaration_answer',
+        message=f"Відповідь на питання {q_index + 1}: {question['question'][:50]}...",
+        admin_telegram_id=admin_id
+    )
+
+    # Переходимо до наступного питання
+    context.user_data['declaration_current_q'] += 1
+    await declaration_ask_question(update, context)
+
+    return DECL_QUESTION
+
+async def declaration_handle_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка питання з файлами (Q15)"""
+    client, admin_id = get_active_client(update, context)
+    q_index = context.user_data['declaration_current_q']
+    question = DECLARATION_QUESTIONS[q_index]
+
+    # Ініціалізуємо список файлів якщо потрібно
+    if 'declaration_files' not in context.user_data:
+        context.user_data['declaration_files'] = []
+
+    # Якщо це callback (Skip або Done)
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+
+        if query.data == CALLBACK_DECL_SKIP:
+            # Пропускаємо питання
+            context.user_data['declaration_current_q'] += 1
+            context.user_data.pop('declaration_files', None)
+            await declaration_ask_question(update, context)
+            return DECL_QUESTION
+
+        elif query.data == CALLBACK_DONE:
+            # Зберігаємо файли як JSON
+            files_data = context.user_data.get('declaration_files', [])
+            if files_data:
+                import json
+                db.update_declaration_answer(
+                    client['id'],
+                    question['key'],
+                    json.dumps(files_data, ensure_ascii=False)
+                )
+
+            # Переходимо до наступного питання
+            context.user_data['declaration_current_q'] += 1
+            context.user_data.pop('declaration_files', None)
+            await declaration_ask_question(update, context)
+            return DECL_QUESTION
+
+    # Якщо це файл
+    if update.message and update.message.document:
+        file = update.message.document
+
+        try:
+            # Завантажуємо файл
+            tg_file = await context.bot.get_file(file.file_id)
+            temp_path = os.path.join(tempfile.gettempdir(), file.file_name)
+            await tg_file.download_to_drive(temp_path)
+
+            # Створюємо папку "Декларація" на Drive
+            folders = drive.create_client_folder_structure(client['full_name'], client['phone'])
+
+            # Перевіряємо чи є папка "Декларація", якщо ні - створюємо
+            declaration_folder_id = None
+            parent_folder_id = folders['root']['id']
+
+            # Шукаємо папку "Декларація"
+            existing_folders = drive.service.files().list(
+                q=f"name='Декларація' and '{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                fields='files(id, name)'
+            ).execute().get('files', [])
+
+            if existing_folders:
+                declaration_folder_id = existing_folders[0]['id']
+            else:
+                # Створюємо папку
+                folder_metadata = {
+                    'name': 'Декларація',
+                    'mimeType': 'application/vnd.google-apps.folder',
+                    'parents': [parent_folder_id]
+                }
+                folder = drive.service.files().create(
+                    body=folder_metadata,
+                    fields='id'
+                ).execute()
+                declaration_folder_id = folder['id']
+
+            # Завантажуємо файл
+            drive_file = drive.upload_file(temp_path, declaration_folder_id, file.file_name)
+
+            # Додаємо до списку
+            context.user_data['declaration_files'].append({
+                'file_name': file.file_name,
+                'drive_file_id': drive_file['id'],
+                'drive_url': drive_file['webViewLink']
+            })
+
+            os.remove(temp_path)
+
+            # Показуємо статус
+            files_count = len(context.user_data['declaration_files'])
+            await update.message.reply_text(
+                f"✅ Файл завантажено: {file.file_name}\n\n"
+                f"📊 Завантажено файлів: {files_count}\n\n"
+                f"💡 Надішліть ще файли або натисніть \"Готово\"",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Готово", callback_data=CALLBACK_DONE),
+                    InlineKeyboardButton("⏭ Пропустити", callback_data=CALLBACK_DECL_SKIP)
+                ]])
+            )
+
+        except Exception as e:
+            logger.error(f"Error uploading declaration file: {e}")
+            await update.message.reply_text(
+                f"❌ Помилка завантаження файлу: {str(e)}\n"
+                f"Спробуйте ще раз."
+            )
+
+        return DECL_FILES
+
+    # Якщо це текстове повідомлення замість файлу
+    if update.message and update.message.text:
+        await update.message.reply_text(
+            "📎 Це питання потребує завантаження файлів.\n\n"
+            "Надішліть документи або натисніть \"Пропустити\"",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⏭ Пропустити", callback_data=CALLBACK_DECL_SKIP)
+            ]])
+        )
+        return DECL_FILES
+
+    return DECL_FILES
+
+async def declaration_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пропустити необов'язкове питання"""
+    query = update.callback_query
+    await query.answer()
+
+    q_index = context.user_data['declaration_current_q']
+    question = DECLARATION_QUESTIONS[q_index]
+
+    if question['required']:
+        await query.answer("❌ Це питання обов'язкове!", show_alert=True)
+        return DECL_QUESTION
+
+    # Переходимо до наступного питання
+    context.user_data['declaration_current_q'] += 1
+    await declaration_ask_question(update, context)
+
+    return DECL_QUESTION
+
+async def declaration_complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Завершення анкети та створення файлу"""
+    client, admin_id = get_active_client(update, context)
+
+    # Отримуємо всі відповіді
+    declaration = db.get_declaration(client['id'])
+
+    # Формуємо текстовий файл з відповідями
+    content = f"АНКЕТА ДЛЯ СКЛАДАННЯ ПОДАТКОВОЇ ДЕКЛАРАЦІЇ\n"
+    content += f"Клієнт: {client['full_name']}\n"
+    content += f"Телефон: {client['phone']}\n"
+    content += f"Дата заповнення: {declaration['created_at'].strftime('%d.%m.%Y %H:%M')}\n"
+    content += "=" * 80 + "\n\n"
+
+    for idx, question in enumerate(DECLARATION_QUESTIONS, 1):
+        key = question['key']
+        answer = declaration.get(key, '')
+
+        content += f"{idx}. {question['question']}\n"
+
+        if answer:
+            if question.get('type') == 'files':
+                # Якщо це файли - розпарсимо JSON
+                try:
+                    import json
+                    files = json.loads(answer)
+                    content += "Файли:\n"
+                    for file_info in files:
+                        content += f"  - {file_info['file_name']}: {file_info['drive_url']}\n"
+                except:
+                    content += f"{answer}\n"
+            else:
+                content += f"{answer}\n"
+        else:
+            content += "(Пропущено)\n"
+
+        content += "\n"
+
+    # Зберігаємо файл на Drive
+    try:
+        # Створюємо тимчасовий файл
+        temp_path = os.path.join(tempfile.gettempdir(), f"Анкета_{client['full_name']}.txt")
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        # Отримуємо або створюємо папку "Декларація"
+        folders = drive.create_client_folder_structure(client['full_name'], client['phone'])
+        parent_folder_id = folders['root']['id']
+
+        existing_folders = drive.service.files().list(
+            q=f"name='Декларація' and '{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+            fields='files(id, name)'
+        ).execute().get('files', [])
+
+        if existing_folders:
+            declaration_folder_id = existing_folders[0]['id']
+        else:
+            folder_metadata = {
+                'name': 'Декларація',
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [parent_folder_id]
+            }
+            folder = drive.service.files().create(
+                body=folder_metadata,
+                fields='id'
+            ).execute()
+            declaration_folder_id = folder['id']
+
+        # Завантажуємо файл
+        file_name = f"Анкета_{client['full_name']}.txt"
+        drive_file = drive.upload_file(temp_path, declaration_folder_id, file_name)
+        os.remove(temp_path)
+
+        # Оновлюємо статус декларації
+        db.complete_declaration(client['id'])
+
+        # Логуємо
+        db.log_notification(
+            client_id=client['id'],
+            notification_type='declaration_completed',
+            message=f"Анкету декларації завершено",
+            admin_telegram_id=admin_id
+        )
+
+        # Повідомлення про завершення
+        message = (
+            f"✅ <b>Анкету успішно заповнено!</b>\n\n"
+            f"📁 Відповіді збережено на Google Drive\n"
+            f"📄 <a href=\"{drive_file['webViewLink']}\">Переглянути анкету</a>\n\n"
+            f"Дякуємо за відповіді! Наш менеджер опрацює інформацію "
+            f"та зв'яжеться з вами найближчим часом."
+        )
+
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                message,
+                parse_mode='HTML',
+                disable_web_page_preview=True
+            )
+        else:
+            await update.message.reply_text(
+                message,
+                parse_mode='HTML',
+                disable_web_page_preview=True,
+                reply_markup=get_main_keyboard()
+            )
+
+    except Exception as e:
+        logger.error(f"Error completing declaration: {e}")
+        error_message = "❌ Помилка збереження анкети. Зв'яжіться з менеджером."
+
+        if update.callback_query:
+            await update.callback_query.edit_message_text(error_message)
+        else:
+            await update.message.reply_text(error_message)
+
+    # Очищаємо дані conversation
+    context.user_data.pop('declaration_current_q', None)
+    context.user_data.pop('declaration_id', None)
+    context.user_data.pop('declaration_files', None)
+
+    return ConversationHandler.END
+
+async def declaration_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Скасування заповнення анкети"""
+    await update.message.reply_text(
+        "❌ Заповнення анкети скасовано.\n\n"
+        "Ви можете повернутися до неї пізніше.",
+        reply_markup=get_main_keyboard()
+    )
+
+    context.user_data.pop('declaration_current_q', None)
+    context.user_data.pop('declaration_id', None)
+    context.user_data.pop('declaration_files', None)
+
+    return ConversationHandler.END
 
 # ============================================================================
 # ADMIN COMMANDS
@@ -1518,7 +2098,34 @@ def main():
         fallbacks=[CommandHandler('start', start)]
     )
 
+    # Declaration form conversation handler
+    declaration_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(
+                filters.TEXT & filters.Regex("^📋 Анкета декларації$"),
+                declaration_start
+            )
+        ],
+        states={
+            DECL_START: [
+                CallbackQueryHandler(declaration_begin, pattern=f"^{CALLBACK_DECL_START}$")
+            ],
+            DECL_QUESTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, declaration_receive_answer),
+                CallbackQueryHandler(declaration_skip, pattern=f"^{CALLBACK_DECL_SKIP}$")
+            ],
+            DECL_FILES: [
+                MessageHandler(filters.Document.ALL, declaration_handle_files),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, declaration_handle_files),
+                CallbackQueryHandler(declaration_handle_files, pattern=f"^{CALLBACK_DONE}$"),
+                CallbackQueryHandler(declaration_handle_files, pattern=f"^{CALLBACK_DECL_SKIP}$")
+            ]
+        },
+        fallbacks=[CommandHandler('cancel', declaration_cancel)]
+    )
+
     application.add_handler(conv_handler)
+    application.add_handler(declaration_handler)
     # Admin commands
     application.add_handler(CommandHandler('login', admin_login))
     application.add_handler(CommandHandler('register', admin_register))

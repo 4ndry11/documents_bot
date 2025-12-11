@@ -7,6 +7,7 @@ import logging
 import tempfile
 import base64
 import json
+import pytz
 from datetime import datetime, timedelta
 from io import BytesIO
 from threading import Thread
@@ -438,6 +439,38 @@ class Database:
         cutoff_date = datetime.now() - timedelta(days=REMINDER_DAYS)
         return self.execute(query, (cutoff_date,), fetch=True)
 
+    # Reminders
+    def log_reminder(self, client_id, days_inactive):
+        """Записати відправлене нагадування"""
+        query = """
+            INSERT INTO docbot.reminders_log (client_id, days_inactive, sent_at)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
+        """
+        self.execute(query, (client_id, days_inactive))
+
+    def get_last_reminder(self, client_id):
+        """Отримати останнє нагадування для клієнта"""
+        query = """
+            SELECT * FROM docbot.reminders_log
+            WHERE client_id = %s
+            ORDER BY sent_at DESC
+            LIMIT 1
+        """
+        result = self.execute(query, (client_id,), fetch=True)
+        return result[0] if result else None
+
+    def create_reminders_table(self):
+        """Створити таблицю для логування нагадувань"""
+        query = """
+            CREATE TABLE IF NOT EXISTS docbot.reminders_log (
+                id SERIAL PRIMARY KEY,
+                client_id INTEGER REFERENCES docbot.clients(id) ON DELETE CASCADE,
+                days_inactive INTEGER NOT NULL,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        self.execute(query)
+
     # Declarations
     def get_or_create_declaration(self, client_id):
         """Отримати існуючу декларацію або створити нову"""
@@ -779,6 +812,110 @@ async def notify_admins(message, parse_mode='HTML'):
             logger.info(f"Notification sent to admin: {admin_id}")
         except Exception as e:
             logger.error(f"Failed to notify admin {admin_id}: {e}")
+
+async def check_and_send_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """Перевірка неактивних клієнтів та відправка нагадувань
+
+    Логіка частоти:
+    - 3 дні неактивності → перше нагадування
+    - 6 днів → друге нагадування (через 3 дні після першого)
+    - 9 днів → третє нагадування (через 3 дні після другого)
+    - 10+ днів → щоденні нагадування
+    """
+    try:
+        logger.info("Starting reminder check...")
+
+        # Отримуємо всіх неактивних клієнтів (більше 3 днів)
+        inactive_clients = db.get_inactive_clients()
+
+        if not inactive_clients:
+            logger.info("No inactive clients found")
+            return
+
+        logger.info(f"Found {len(inactive_clients)} inactive clients")
+
+        for client in inactive_clients:
+            try:
+                # Підраховуємо кількість днів неактивності
+                days_inactive = (datetime.now() - client['last_activity']).days
+
+                # Отримуємо останнє нагадування
+                last_reminder = db.get_last_reminder(client['id'])
+
+                # Визначаємо чи потрібно надіслати нагадування
+                should_send = False
+
+                if not last_reminder:
+                    # Перше нагадування - якщо 3+ дні неактивності
+                    should_send = days_inactive >= 3
+                else:
+                    # Підраховуємо час з останнього нагадування
+                    days_since_last = (datetime.now() - last_reminder['sent_at']).days
+
+                    if days_inactive < 10:
+                        # До 10 днів - кожні 3 дні
+                        should_send = days_since_last >= 3
+                    else:
+                        # 10+ днів - щоденно
+                        should_send = days_since_last >= 1
+
+                if should_send:
+                    # Формуємо повідомлення залежно від прогресу
+                    doc_counts = db.get_document_counts(client['id'])
+                    uploaded = sum(doc_counts.values())
+                    required_total = len(REQUIRED_DOCUMENTS)
+
+                    if uploaded == 0:
+                        message = (
+                            f"👋 Вітаю, {client['full_name']}!\n\n"
+                            f"😊 Нагадуємо, що ви ще не завантажили жодного документа.\n\n"
+                            f"📋 Будь ласка, почніть завантаження документів, щоб прискорити процес обробки.\n\n"
+                            f"💡 Натисніть /start щоб побачити чек-лист документів."
+                        )
+                    else:
+                        message = (
+                            f"👋 Вітаю, {client['full_name']}!\n\n"
+                            f"📊 Ви завантажили {uploaded} з {required_total} обов'язкових документів.\n\n"
+                            f"😊 Будь ласка, завершіть завантаження решти документів.\n\n"
+                            f"🎁 Нагадуємо: при зборі всіх документів ви отримаєте бонус від компанії!\n\n"
+                            f"💡 Натисніть /start щоб продовжити."
+                        )
+
+                    # Відправляємо нагадування клієнту
+                    if client['telegram_id']:
+                        await context.bot.send_message(
+                            chat_id=client['telegram_id'],
+                            text=message,
+                            parse_mode='HTML'
+                        )
+
+                        # Логуємо відправлене нагадування
+                        db.log_reminder(client['id'], days_inactive)
+                        db.log_notification(
+                            client_id=client['id'],
+                            notification_type='reminder_sent',
+                            message=f"Нагадування надіслано ({days_inactive} днів неактивності)"
+                        )
+
+                        logger.info(f"Reminder sent to {client['full_name']} ({days_inactive} days inactive)")
+
+                        # Повідомляємо адмінів
+                        await notify_admins(
+                            f"🔔 Надіслано нагадування клієнту\n\n"
+                            f"👤 {client['full_name']}\n"
+                            f"📱 {client['phone']}\n"
+                            f"📊 Неактивний: {days_inactive} днів\n"
+                            f"📄 Завантажено: {uploaded}/{required_total} документів"
+                        )
+
+            except Exception as e:
+                logger.error(f"Error sending reminder to client {client['id']}: {e}")
+                continue
+
+        logger.info("Reminder check completed")
+
+    except Exception as e:
+        logger.error(f"Error in check_and_send_reminders: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -2325,6 +2462,28 @@ def main():
         (filters.Document.ALL | filters.PHOTO) & ~filters.COMMAND,
         handle_file_upload
     ))
+
+    # Створюємо таблицю для нагадувань (якщо не існує)
+    try:
+        db.create_reminders_table()
+        logger.info("Reminders table created/verified")
+    except Exception as e:
+        logger.error(f"Error creating reminders table: {e}")
+
+    # Налаштовуємо JobQueue для щоденної перевірки неактивних клієнтів
+    job_queue = application.job_queue
+
+    # Запускаємо перевірку щодня о 10:00 за київським часом
+    kyiv_tz = pytz.timezone('Europe/Kiev')
+    job_queue.run_daily(
+        check_and_send_reminders,
+        time=datetime.strptime("10:00", "%H:%M").time(),
+        days=(0, 1, 2, 3, 4, 5, 6),  # Всі дні тижня
+        name="daily_reminder_check",
+        tzinfo=kyiv_tz
+    )
+
+    logger.info("Daily reminder job scheduled for 10:00 Kyiv time")
 
     logger.info("Bot started!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

@@ -673,11 +673,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
+    # Відправляємо відео-інструкцію
+    video_path = "zvilnymo_compressed.mp4"
+    if os.path.exists(video_path):
+        try:
+            with open(video_path, 'rb') as video_file:
+                await update.message.reply_video(
+                    video=video_file,
+                    caption="📹 Інструкція: Як користуватися ботом для збору документів",
+                    supports_streaming=True
+                )
+        except Exception as e:
+            logger.error(f"Failed to send video: {e}")
+
     await update.message.reply_text(
+        "👆 <b>Перегляньте відео вище - це коротка інструкція про те, як працювати з ботом!</b>\n\n"
         "Вітаю! 👋\n\n"
         "Я допоможу вам зібрати всі необхідні документи для списання боргів.\n\n"
+        "📹 <b>У відео показано:</b>\n"
+        "• Як реєструватися в боті\n"
+        "• Як завантажувати документи\n"
+        "• Які документи потрібні\n\n"
         "🎁 <b>БОНУС:</b> При завершенні збору всіх документів ви отримаєте "
         "подарунок від нашої компанії!\n\n"
+        "⚠️ <b>ВАЖЛИВО:</b> Обов'язково перегляньте відео вище перед початком роботи!\n\n"
         "Почнемо? Будь ласка, введіть ваше <b>ПІБ</b> (Прізвище Ім'я По батькові):",
         parse_mode='HTML'
     )

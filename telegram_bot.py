@@ -1919,6 +1919,15 @@ async def declaration_complete(update: Update, context: ContextTypes.DEFAULT_TYP
             admin_telegram_id=admin_id
         )
 
+        # Відправляємо нотифікацію адмінам
+        await notify_admins(
+            f"📋 Клієнт завершив анкету декларації!\n\n"
+            f"👤 {client['full_name']}\n"
+            f"📱 {client['phone']}\n"
+            f"📊 Статус: {client['status']}\n"
+            f"📁 <a href=\"{client['drive_folder_url']}\">Відкрити папку на Drive</a>"
+        )
+
         # Повідомлення про завершення та автоматичний показ чек-листа
         completion_message = (
             f"✅ <b>Анкету успішно заповнено!</b>\n\n"

@@ -1535,10 +1535,8 @@ async def declaration_begin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.edit_message_text("🚀 Розпочинаємо заповнення анкети...")
 
-    # Показуємо поточне питання
-    await declaration_ask_question(update, context)
-
-    return DECL_QUESTION
+    # Показуємо поточне питання та повертаємо його стан
+    return await declaration_ask_question(update, context)
 
 async def declaration_ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показати поточне питання"""
@@ -1653,9 +1651,7 @@ async def declaration_receive_answer(update: Update, context: ContextTypes.DEFAU
 
     # Переходимо до наступного питання
     context.user_data['declaration_current_q'] += 1
-    await declaration_ask_question(update, context)
-
-    return DECL_QUESTION
+    return await declaration_ask_question(update, context)
 
 async def declaration_handle_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка питання з файлами (Q15)"""
@@ -1686,8 +1682,7 @@ async def declaration_handle_files(update: Update, context: ContextTypes.DEFAULT
 
             context.user_data['declaration_current_q'] += 1
             context.user_data.pop('declaration_files', None)
-            await declaration_ask_question(update, context)
-            return DECL_QUESTION
+            return await declaration_ask_question(update, context)
 
         elif query.data == CALLBACK_DONE:
             # Зберігаємо файли як JSON
@@ -1703,8 +1698,7 @@ async def declaration_handle_files(update: Update, context: ContextTypes.DEFAULT
             # Переходимо до наступного питання
             context.user_data['declaration_current_q'] += 1
             context.user_data.pop('declaration_files', None)
-            await declaration_ask_question(update, context)
-            return DECL_QUESTION
+            return await declaration_ask_question(update, context)
 
     # Якщо це файл
     if update.message and update.message.document:
@@ -1825,9 +1819,7 @@ async def declaration_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Переходимо до наступного питання
     context.user_data['declaration_current_q'] += 1
-    await declaration_ask_question(update, context)
-
-    return DECL_QUESTION
+    return await declaration_ask_question(update, context)
 
 async def declaration_complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Завершення анкети та створення файлу"""
@@ -1947,10 +1939,18 @@ async def declaration_complete(update: Update, context: ContextTypes.DEFAULT_TYP
             parse_mode='HTML'
         )
 
+        # Очищаємо дані conversation ПЕРЕД показом чек-листа
+        context.user_data.pop('declaration_current_q', None)
+        context.user_data.pop('declaration_id', None)
+        context.user_data.pop('declaration_files', None)
+
         # Автоматично показуємо чек-лист (як після завантаження документів)
         import asyncio
         await asyncio.sleep(0.5)
         await show_checklist(update, context, force_new_message=True)
+
+        # Повертаємо END щоб завершити conversation ПЕРЕД показом чек-листа
+        return ConversationHandler.END
 
     except Exception as e:
         logger.error(f"Error completing declaration: {e}")
@@ -1969,7 +1969,7 @@ async def declaration_complete(update: Update, context: ContextTypes.DEFAULT_TYP
             text=error_message
         )
 
-    # Очищаємо дані conversation
+    # Якщо була помилка, також очищаємо дані і завершуємо conversation
     context.user_data.pop('declaration_current_q', None)
     context.user_data.pop('declaration_id', None)
     context.user_data.pop('declaration_files', None)
@@ -1987,9 +1987,7 @@ async def declaration_previous(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data['declaration_current_q'] = current_q - 1
 
     # Показуємо попереднє питання
-    await declaration_ask_question(update, context)
-
-    return DECL_QUESTION
+    return await declaration_ask_question(update, context)
 
 async def declaration_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Вийти в головне меню зі збереженням прогресу"""

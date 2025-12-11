@@ -1476,9 +1476,10 @@ async def declaration_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Після завершення редагування неможливе\n\n"
         "📝 Готові розпочати?",
         parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Почати заповнення", callback_data="decl_begin")
-        ]])
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Почати заповнення", callback_data="decl_begin")],
+            [InlineKeyboardButton("« Назад", callback_data=CALLBACK_BACK)]
+        ])
     )
 
     return DECL_START
@@ -1538,7 +1539,10 @@ async def declaration_ask_question(update: Update, context: ContextTypes.DEFAULT
     if not question['required']:
         buttons.append([InlineKeyboardButton("⏭ Пропустити", callback_data=CALLBACK_DECL_SKIP)])
 
-    keyboard = InlineKeyboardMarkup(buttons) if buttons else None
+    # Завжди додаємо кнопку "Назад"
+    buttons.append([InlineKeyboardButton("« Назад", callback_data=CALLBACK_BACK)])
+
+    keyboard = InlineKeyboardMarkup(buttons)
 
     # Відправляємо питання
     if update.callback_query:
@@ -1854,6 +1858,21 @@ async def declaration_complete(update: Update, context: ContextTypes.DEFAULT_TYP
 
     return ConversationHandler.END
 
+async def declaration_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Повернутися назад до чек-листа"""
+    query = update.callback_query
+    await query.answer()
+
+    # Очищаємо дані анкети
+    context.user_data.pop('declaration_current_q', None)
+    context.user_data.pop('declaration_id', None)
+    context.user_data.pop('declaration_files', None)
+
+    # Повертаємося до чек-листа
+    await show_checklist(update, context)
+
+    return ConversationHandler.END
+
 async def declaration_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Скасування заповнення анкети"""
     await update.message.reply_text(
@@ -2106,17 +2125,20 @@ def main():
         ],
         states={
             DECL_START: [
-                CallbackQueryHandler(declaration_begin, pattern=f"^decl_begin$")
+                CallbackQueryHandler(declaration_begin, pattern=f"^decl_begin$"),
+                CallbackQueryHandler(declaration_back, pattern=f"^{CALLBACK_BACK}$")
             ],
             DECL_QUESTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, declaration_receive_answer),
-                CallbackQueryHandler(declaration_skip, pattern=f"^{CALLBACK_DECL_SKIP}$")
+                CallbackQueryHandler(declaration_skip, pattern=f"^{CALLBACK_DECL_SKIP}$"),
+                CallbackQueryHandler(declaration_back, pattern=f"^{CALLBACK_BACK}$")
             ],
             DECL_FILES: [
                 MessageHandler(filters.Document.ALL, declaration_handle_files),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, declaration_handle_files),
                 CallbackQueryHandler(declaration_handle_files, pattern=f"^{CALLBACK_DONE}$"),
-                CallbackQueryHandler(declaration_handle_files, pattern=f"^{CALLBACK_DECL_SKIP}$")
+                CallbackQueryHandler(declaration_handle_files, pattern=f"^{CALLBACK_DECL_SKIP}$"),
+                CallbackQueryHandler(declaration_back, pattern=f"^{CALLBACK_BACK}$")
             ]
         },
         fallbacks=[CommandHandler('cancel', declaration_cancel)],

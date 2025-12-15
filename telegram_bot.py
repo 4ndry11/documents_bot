@@ -325,19 +325,54 @@ def save_admin(telegram_id):
 
 class Database:
     def __init__(self):
-        self.conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-        self.conn.autocommit = True
+        self.conn = None
+        self._connect()
+
+    def _connect(self):
+        try:
+            if self.conn:
+                try:
+                    self.conn.close()
+                except:
+                    pass
+            self.conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+            self.conn.autocommit = True
+            logger.info("Database connection established")
+        except Exception as e:
+            logger.error(f"Failed to connect to database: {e}")
+            raise
+
+    def _ensure_connection(self):
+        try:
+            if self.conn is None or self.conn.closed:
+                logger.warning("Database connection lost, reconnecting...")
+                self._connect()
+            else:
+                with self.conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+            logger.warning(f"Database connection check failed: {e}, reconnecting...")
+            self._connect()
 
     def execute(self, query, params=None, fetch=False):
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute(query, params or ())
-                if fetch:
-                    return cur.fetchall() if cur.description else None
-                return cur.rowcount
-        except Exception as e:
-            logger.error(f"Database error: {e}")
-            raise
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                self._ensure_connection()
+                with self.conn.cursor() as cur:
+                    cur.execute(query, params or ())
+                    if fetch:
+                        return cur.fetchall() if cur.description else None
+                    return cur.rowcount
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+                logger.error(f"Database error on attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt < max_retries - 1:
+                    self._connect()
+                else:
+                    raise
+            except Exception as e:
+                logger.error(f"Database error: {e}")
+                raise
 
     # Clients
     def create_client(self, telegram_id, full_name, phone):

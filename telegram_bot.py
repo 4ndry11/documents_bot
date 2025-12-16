@@ -30,6 +30,9 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
+# AI Document Validator
+from ai_document_validator import validator as ai_validator
+
 # ============================================================================
 # КОНФІГУРАЦІЯ
 # ============================================================================
@@ -534,6 +537,48 @@ class Database:
         query = "SELECT * FROM docbot.declarations WHERE client_id = %s"
         result = self.execute(query, (client_id,), fetch=True)
         return result[0] if result else None
+
+    # Document Validations (AI)
+    def save_document_validation(self, document_id, validation_status, error_code, ai_response):
+        """Зберегти результат AI-валідації документа"""
+        query = """
+            INSERT INTO docbot.document_validations
+            (document_id, validation_status, error_code, ai_response, validated_at)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            RETURNING id
+        """
+        result = self.execute(
+            query,
+            (document_id, validation_status, error_code, json.dumps(ai_response) if ai_response else None),
+            fetch=True
+        )
+        return result[0]['id'] if result else None
+
+    def get_document_validation(self, document_id):
+        """Отримати результат валідації документа"""
+        query = "SELECT * FROM docbot.document_validations WHERE document_id = %s ORDER BY validated_at DESC LIMIT 1"
+        result = self.execute(query, (document_id,), fetch=True)
+        return result[0] if result else None
+
+    def update_document_validation_status(self, document_id, validation_status):
+        """Оновити статус валідації документа"""
+        query = """
+            UPDATE docbot.documents
+            SET validation_status = %s
+            WHERE id = %s
+        """
+        self.execute(query, (validation_status, document_id))
+
+    def get_uncertain_documents(self):
+        """Отримати всі документи зі статусом UNCERTAIN що потребують ручної перевірки"""
+        query = """
+            SELECT d.*, c.full_name, c.phone, c.telegram_id
+            FROM docbot.documents d
+            JOIN docbot.clients c ON d.client_id = c.id
+            WHERE d.validation_status = 'uncertain'
+            ORDER BY d.uploaded_at DESC
+        """
+        return self.execute(query, fetch=True)
 
 # ============================================================================
 # GOOGLE DRIVE
@@ -1391,7 +1436,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
             pass
 
     # Показываем сообщение о загрузке
-    loading_msg = await update.message.reply_text("⏳ Обробляю файли...")
+    loading_msg = await update.message.reply_text("⏳ Обробляю та перевіряю файл...")
 
     try:
         # Получаем расширение файла
@@ -1413,6 +1458,39 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         temp_path = os.path.join(tempfile.gettempdir(), original_file_name)
         await tg_file.download_to_drive(temp_path)
 
+        # ============================================================================
+        # AI-ПЕРЕВІРКА ДОКУМЕНТА
+        # ============================================================================
+        validation_result = ai_validator.validate_document(temp_path, doc_key)
+
+        # Якщо документ REJECTED - НЕ завантажуємо на Drive
+        if validation_result and validation_result.is_rejected():
+            # Видаляємо тимчасовий файл
+            os.remove(temp_path)
+
+            # Видаляємо повідомлення про завантаження
+            await loading_msg.delete()
+
+            # Повідомляємо клієнта про відхилення
+            await update.message.reply_text(
+                validation_result.get_user_message(),
+                parse_mode='HTML'
+            )
+
+            # Логуємо відхилення
+            db.log_notification(
+                client_id=client['id'],
+                notification_type='document_rejected',
+                message=f"AI відхилив документ: {doc_info['name']} - причина: {validation_result.error_code}",
+                admin_telegram_id=admin_id
+            )
+
+            logger.info(f"Document REJECTED by AI: {doc_key} for client {client['id']} - reason: {validation_result.error_code}")
+            return  # Припиняємо виконання, документ НЕ завантажено
+
+        # ============================================================================
+        # ЗАВАНТАЖЕННЯ НА DRIVE (для ACCEPTED та UNCERTAIN)
+        # ============================================================================
         folder_type = doc_info['folder']
         folders = drive.create_client_folder_structure(client['full_name'], client['phone'])
         target_folder_id = folders[folder_type]['id']
@@ -1420,7 +1498,8 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Загружаем с новым именем
         drive_file = drive.upload_file(temp_path, target_folder_id, new_file_name)
 
-        db.add_document(
+        # Додаємо документ в БД
+        document_id = db.add_document(
             client_id=client['id'],
             document_type=doc_key,
             file_name=new_file_name,
@@ -1430,13 +1509,53 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
             uploaded_by_admin_id=admin_id
         )
 
+        # Зберігаємо результат AI-валідації (якщо є)
+        if validation_result:
+            db.save_document_validation(
+                document_id=document_id,
+                validation_status=validation_result.status,
+                error_code=validation_result.error_code,
+                ai_response=validation_result.ai_response
+            )
+            db.update_document_validation_status(document_id, validation_result.status)
+
+            # Якщо UNCERTAIN - сповіщаємо адмінів
+            if validation_result.is_uncertain():
+                await notify_admins(
+                    f"⚠️ <b>Документ потребує перевірки</b>\n\n"
+                    f"👤 Клієнт: {client['full_name']}\n"
+                    f"📱 Телефон: {client['phone']}\n"
+                    f"📄 Тип документа: {doc_info['name']}\n"
+                    f"🤖 AI сумнівається в документі\n\n"
+                    f"📁 <a href=\"{drive_file['webViewLink']}\">Переглянути документ</a>\n"
+                    f"📂 <a href=\"{client['drive_folder_url']}\">Папка клієнта</a>"
+                )
+
         # Логируем в notifications_log
+        notification_type = 'document_uploaded'
+        if validation_result:
+            if validation_result.is_accepted():
+                notification_type = 'document_uploaded_accepted'
+            elif validation_result.is_uncertain():
+                notification_type = 'document_uploaded_uncertain'
+
         db.log_notification(
             client_id=client['id'],
-            notification_type='document_uploaded',
-            message=f"{'Адмін завантажив' if admin_id else 'Завантажено'} документ: {doc_info['name']} - {new_file_name}",
+            notification_type=notification_type,
+            message=f"{'Адмін завантажив' if admin_id else 'Завантажено'} документ: {doc_info['name']} - {new_file_name} (AI: {validation_result.status if validation_result else 'skipped'})",
             admin_telegram_id=admin_id
         )
+
+        # Сповіщаємо адмінів про завантаження (зберігаємо існуючу логіку)
+        if not admin_id:  # Тільки якщо завантажує клієнт (не адмін)
+            await notify_admins(
+                f"📄 <b>Новий документ</b>\n\n"
+                f"👤 {client['full_name']}\n"
+                f"📱 {client['phone']}\n"
+                f"📋 Тип: {doc_info['name']}\n"
+                f"✅ Статус AI: {validation_result.status if validation_result else 'не перевірено'}\n\n"
+                f"📁 <a href=\"{drive_file['webViewLink']}\">Переглянути документ</a>"
+            )
 
         db.update_last_activity(client['id'])
         os.remove(temp_path)
@@ -1456,7 +1575,14 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         uploaded_files = context.user_data['uploaded_files']
         count = len(uploaded_files)
 
-        message = f"✅ <b>Завантажено файлів: {count}</b>\n\n"
+        # Повідомлення для користувача
+        if validation_result:
+            user_message = validation_result.get_user_message()
+        else:
+            user_message = "✅ Документ успішно завантажено!"
+
+        message = f"{user_message}\n\n"
+        message += f"<b>Завантажено файлів: {count}</b>\n\n"
         for idx, file_info in enumerate(uploaded_files, 1):
             message += f"{idx}. {file_info['name']} — {file_info['status']}\n"
 

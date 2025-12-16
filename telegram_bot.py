@@ -8,7 +8,7 @@ import tempfile
 import base64
 import json
 import pytz
-from datetime import datetime, timedelta
+from datetime import datetime
 from io import BytesIO
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -469,13 +469,13 @@ class Database:
         self.execute(query, (client_id, notification_type, message, admin_telegram_id))
 
     def get_inactive_clients(self):
+        """Получить клиентов неактивных 3+ дня"""
         query = """
             SELECT * FROM docbot.clients
             WHERE status = 'in_progress'
-            AND last_activity < %s
+            AND EXTRACT(DAY FROM (NOW() - last_activity)) >= 3
         """
-        cutoff_date = datetime.now() - timedelta(days=REMINDER_DAYS)
-        return self.execute(query, (cutoff_date,), fetch=True)
+        return self.execute(query, fetch=True)
 
     # Reminders
     def log_reminder(self, client_id, days_inactive):

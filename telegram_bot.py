@@ -131,7 +131,7 @@ DOCUMENT_TYPES = {
         'emoji': '💰',
         'folder': 'personal',
         'required': True,
-        'video': 'https://www.youtube.com/shorts/5yzLPrDhImo'
+        'video': 'https://www.youtube.com/shorts/YfYkxGiyATo'
     },
     'story': {
         'name': 'Ваша історія (у форматі Word)',

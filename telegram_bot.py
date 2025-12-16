@@ -539,17 +539,17 @@ class Database:
         return result[0] if result else None
 
     # Document Validations (AI)
-    def save_document_validation(self, document_id, validation_status, error_code, ai_response):
+    def save_document_validation(self, document_id, validation_status, ai_response):
         """Зберегти результат AI-валідації документа"""
         query = """
             INSERT INTO docbot.document_validations
-            (document_id, validation_status, error_code, ai_response, validated_at)
-            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            (document_id, validation_status, ai_response, validated_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
             RETURNING id
         """
         result = self.execute(
             query,
-            (document_id, validation_status, error_code, json.dumps(ai_response) if ai_response else None),
+            (document_id, validation_status, json.dumps(ai_response) if ai_response else None),
             fetch=True
         )
         return result[0]['id'] if result else None
@@ -1471,10 +1471,16 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # Видаляємо повідомлення про завантаження
             await loading_msg.delete()
 
-            # Повідомляємо клієнта про відхилення
+            # Повідомляємо клієнта про відхилення з кнопками
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Спробувати ще раз", callback_data=f"upload_{doc_key}")],
+                [InlineKeyboardButton("« Назад до чек-листа", callback_data=CALLBACK_BACK)]
+            ])
+
             await update.message.reply_text(
                 validation_result.get_user_message(),
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=keyboard
             )
 
             # Логуємо відхилення
@@ -1511,13 +1517,16 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         # Зберігаємо результат AI-валідації (якщо є)
         if validation_result:
-            db.save_document_validation(
-                document_id=document_id,
-                validation_status=validation_result.status,
-                error_code=validation_result.error_code,
-                ai_response=validation_result.ai_response
-            )
-            db.update_document_validation_status(document_id, validation_result.status)
+            try:
+                db.save_document_validation(
+                    document_id=document_id,
+                    validation_status=validation_result.status,
+                    ai_response=validation_result.ai_response
+                )
+                db.update_document_validation_status(document_id, validation_result.status)
+            except Exception as e:
+                # Логуємо помилку БД, але не показуємо користувачу
+                logger.error(f"Error saving AI validation to DB: {e}", exc_info=True)
 
             # Якщо UNCERTAIN - сповіщаємо адмінів
             if validation_result.is_uncertain():

@@ -2666,7 +2666,7 @@ def main():
     # Запускаємо перевірку щодня о 14:03 за київським часом
     import datetime as dt
     kyiv_tz = pytz.timezone('Europe/Kiev')
-    check_time = dt.time(hour=14, minute=3, tzinfo=kyiv_tz)
+    check_time = dt.time(hour=14, minute=23, tzinfo=kyiv_tz)
 
     job_queue.run_daily(
         check_and_send_reminders,

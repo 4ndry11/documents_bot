@@ -473,7 +473,7 @@ class Database:
         query = """
             SELECT * FROM docbot.clients
             WHERE status = 'in_progress'
-            AND EXTRACT(DAY FROM (NOW() - last_activity)) >= 3
+            AND (NOW() AT TIME ZONE 'UTC' - last_activity) >= INTERVAL '3 days'
         """
         return self.execute(query, fetch=True)
 
@@ -918,7 +918,13 @@ async def check_and_send_reminders(context: ContextTypes.DEFAULT_TYPE):
             try:
                 # Підраховуємо кількість днів неактивності
                 now_utc = datetime.now(timezone.utc)
-                days_inactive = (now_utc - client['last_activity']).days
+
+                # Переконуємося що last_activity має timezone
+                last_activity = client['last_activity']
+                if last_activity.tzinfo is None:
+                    last_activity = last_activity.replace(tzinfo=timezone.utc)
+
+                days_inactive = (now_utc - last_activity).days
 
                 # Отримуємо останнє нагадування
                 last_reminder = db.get_last_reminder(client['id'])
@@ -931,7 +937,11 @@ async def check_and_send_reminders(context: ContextTypes.DEFAULT_TYPE):
                     should_send = days_inactive >= 3
                 else:
                     # Підраховуємо час з останнього нагадування
-                    days_since_last = (now_utc - last_reminder['sent_at']).days
+                    sent_at = last_reminder['sent_at']
+                    if sent_at.tzinfo is None:
+                        sent_at = sent_at.replace(tzinfo=timezone.utc)
+
+                    days_since_last = (now_utc - sent_at).days
 
                     if days_inactive < 10:
                         # До 10 днів - кожні 3 дні
@@ -1534,18 +1544,6 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 # Логуємо помилку БД, але не показуємо користувачу
                 logger.error(f"Error saving AI validation to DB: {e}", exc_info=True)
 
-            # Якщо UNCERTAIN - сповіщаємо адмінів
-            if validation_result.is_uncertain():
-                await notify_admins(
-                    f"⚠️ <b>Документ потребує перевірки</b>\n\n"
-                    f"👤 Клієнт: {client['full_name']}\n"
-                    f"📱 Телефон: {client['phone']}\n"
-                    f"📄 Тип документа: {doc_info['name']}\n"
-                    f"🤖 AI сумнівається в документі\n\n"
-                    f"📁 <a href=\"{drive_file['webViewLink']}\">Переглянути документ</a>\n"
-                    f"📂 <a href=\"{client['drive_folder_url']}\">Папка клієнта</a>"
-                )
-
         # Логируем в notifications_log
         notification_type = 'document_uploaded'
         if validation_result:
@@ -1575,14 +1573,17 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # Визначаємо статус AI для повідомлення
             ai_status_emoji = "✅"
             ai_status_text = validation_result.status if validation_result else 'не перевірено'
+            notification_title = "📄 <b>Клієнт завантажив документ</b>"
+
             if validation_result:
                 if validation_result.is_accepted():
                     ai_status_emoji = "✅"
                 elif validation_result.is_uncertain():
                     ai_status_emoji = "⚠️"
+                    notification_title = "⚠️ <b>Документ потребує перевірки</b>"
 
             await notify_admins(
-                f"📄 <b>Клієнт завантажив документ</b>\n\n"
+                f"{notification_title}\n\n"
                 f"👤 {client['full_name']}\n"
                 f"📱 {client['phone']}\n"
                 f"📑 {doc_info['name']}\n"
@@ -2662,10 +2663,10 @@ def main():
     # Налаштовуємо JobQueue для щоденної перевірки неактивних клієнтів
     job_queue = application.job_queue
 
-    # Запускаємо перевірку щодня о 10:00 за київським часом
+    # Запускаємо перевірку щодня о 14:03 за київським часом
     import datetime as dt
     kyiv_tz = pytz.timezone('Europe/Kiev')
-    check_time = dt.time(hour=10, minute=0, tzinfo=kyiv_tz)
+    check_time = dt.time(hour=14, minute=3, tzinfo=kyiv_tz)
 
     job_queue.run_daily(
         check_and_send_reminders,
@@ -2674,7 +2675,7 @@ def main():
         name="daily_reminder_check"
     )
 
-    logger.info("Daily reminder job scheduled for 10:00 Kyiv time")
+    logger.info("Daily reminder job scheduled for 14:03 Kyiv time")
 
     logger.info("Bot started!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

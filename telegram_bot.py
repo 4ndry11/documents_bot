@@ -63,7 +63,11 @@ REMINDER_DAYS = int(os.getenv('REMINDER_DAYS', 3))
 # Підпапки на Drive
 SUBFOLDERS = {
     'credit': 'Кредитні договори',
-    'personal': 'Особисті документи'
+    'personal': 'Особисті документи',
+    'declaration': 'Декларація',
+    'expenses_confirmation': 'Підвердження витрат',
+    'debt_confirmation': 'Підвердження заборгованості',
+    'additional': 'Додаткові документи'
 }
 
 # ============================================================================
@@ -132,7 +136,7 @@ DOCUMENT_TYPES = {
         'name': 'Підтвердження витрат за останні місяці',
         'short': 'Витрати',
         'emoji': '💰',
-        'folder': 'personal',
+        'folder': 'expenses_confirmation',
         'required': True,
         'video': 'https://www.youtube.com/shorts/YfYkxGiyATo'
     },
@@ -156,7 +160,7 @@ DOCUMENT_TYPES = {
         'name': 'Довідки про стан заборгованості',
         'short': 'Заборгованості',
         'emoji': '📋',
-        'folder': 'personal',
+        'folder': 'debt_confirmation',
         'required': True
     },
     'executive': {
@@ -165,6 +169,15 @@ DOCUMENT_TYPES = {
         'emoji': '⚖️',
         'folder': 'personal',
         'required': False
+    },
+    'additional_docs': {
+        'name': 'Додаткові документи',
+        'short': 'Додаткові документи',
+        'emoji': '📎',
+        'folder': 'additional',
+        'required': False,
+        'skip_ai_validation': True,
+        'requires_custom_name': True
     }
 }
 
@@ -661,13 +674,22 @@ class DriveManager:
         else:
             client_folder = self.create_folder(folder_name, ROOT_FOLDER_ID)
 
+        # Створюємо всі підпапки (або знаходимо існуючі)
         credit_folder = self.get_or_create_folder(SUBFOLDERS['credit'], client_folder['id'])
         personal_folder = self.get_or_create_folder(SUBFOLDERS['personal'], client_folder['id'])
+        declaration_folder = self.get_or_create_folder(SUBFOLDERS['declaration'], client_folder['id'])
+        expenses_folder = self.get_or_create_folder(SUBFOLDERS['expenses_confirmation'], client_folder['id'])
+        debt_folder = self.get_or_create_folder(SUBFOLDERS['debt_confirmation'], client_folder['id'])
+        additional_folder = self.get_or_create_folder(SUBFOLDERS['additional'], client_folder['id'])
 
         return {
             'client': client_folder,
             'credit': credit_folder,
-            'personal': personal_folder
+            'personal': personal_folder,
+            'declaration': declaration_folder,
+            'expenses_confirmation': expenses_folder,
+            'debt_confirmation': debt_folder,
+            'additional': additional_folder
         }
 
     def _find_client_folder_by_phone(self, phone):
@@ -734,6 +756,9 @@ WAITING_NAME, WAITING_PHONE = range(2)
 
 # Стани для анкети декларації
 (DECL_START, DECL_QUESTION, DECL_FILES) = range(3)
+
+# Стан для додаткових документів з кастомним ім'ям
+ADDITIONAL_DOC_WAITING_NAME = 100
 
 # Callback data
 CALLBACK_UPLOAD_PREFIX = "upload_"
@@ -1232,8 +1257,11 @@ async def show_checklist(update: Update, context: ContextTypes.DEFAULT_TYPE, for
     message += f"\n💡 <i>Натисніть на документ нижче, щоб завантажити</i>"
 
     # Создаём кнопки и группируем их по 2 в строке
+    # Исключаем 'additional_docs' из основного списка
     buttons = []
     for doc_key, doc_info in DOCUMENT_TYPES.items():
+        if doc_key == 'additional_docs':
+            continue  # Пропускаем, добавим отдельно в конце
         emoji = doc_info['emoji']
         name = doc_info.get('short', doc_info['name'])
         # Меняем emoji с обычного на ✅ после загрузки
@@ -1249,13 +1277,23 @@ async def show_checklist(update: Update, context: ContextTypes.DEFAULT_TYPE, for
         row = buttons[i:i+2]
         keyboard.append(row)
 
-    # Додаємо кнопку "Анкета декларації" внизу, розтягнуту на всю ширину
-    # З галочкою якщо заповнено
+    # Додаємо останній ряд: "Анкета декларації" (зліва) + "Додаткові документи" (справа)
     if declaration_completed:
         decl_button_text = "✅ Анкета декларації"
     else:
         decl_button_text = "📋 Анкета декларації"
-    keyboard.append([InlineKeyboardButton(decl_button_text, callback_data=CALLBACK_DECL_START)])
+
+    # Кнопка "Додаткові документи"
+    if 'additional_docs' in uploaded_types:
+        additional_button_text = "✅ Додаткові документи"
+    else:
+        additional_button_text = "📎 Додаткові документи"
+
+    last_row = [
+        InlineKeyboardButton(decl_button_text, callback_data=CALLBACK_DECL_START),
+        InlineKeyboardButton(additional_button_text, callback_data=f"{CALLBACK_UPLOAD_PREFIX}additional_docs")
+    ]
+    keyboard.append(last_row)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -1306,6 +1344,10 @@ async def handle_upload_request(update: Update, context: ContextTypes.DEFAULT_TY
             message += f"📎 Надішліть файл(и) документів.\n"
         else:
             message += f"📎 Надішліть файл документа.\n"
+
+        # Додаємо підказку про можливість множинної загрузки (для всіх крім additional_docs)
+        if doc_key != 'additional_docs':
+            message += f"\n💡 <i>Ви можете завантажити одразу кілька документів.\nПросто надішліть їх одним повідомленням, а потім натисніть \"Готово\".</i>\n"
 
         # Добавляем видео-ссылку если есть
         if doc_info.get('video'):
@@ -1433,6 +1475,29 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         file = update.message.photo[-1]
         original_file_name = f"photo_{file.file_id}.jpg"
 
+    # ============================================================================
+    # СПЕЦІАЛЬНА ЛОГІКА ДЛЯ ДОДАТКОВИХ ДОКУМЕНТІВ
+    # ============================================================================
+    if doc_info.get('requires_custom_name', False):
+        # Завантажуємо файл тимчасово
+        tg_file = await context.bot.get_file(file.file_id)
+        temp_path = os.path.join(tempfile.gettempdir(), original_file_name)
+        await tg_file.download_to_drive(temp_path)
+
+        # Зберігаємо інформацію про файл у context
+        file_ext = os.path.splitext(original_file_name)[1]
+        context.user_data['additional_doc_temp_path'] = temp_path
+        context.user_data['additional_doc_ext'] = file_ext
+        context.user_data['additional_doc_file_id'] = file.file_id
+
+        # Запитуємо назву документа
+        await update.message.reply_text(
+            "📝 Введіть назву для цього документа:\n\n"
+            "Наприклад: Довідка з роботи, Договір оренди, тощо"
+        )
+
+        return ADDITIONAL_DOC_WAITING_NAME
+
     # Видаляємо попереднє повідомлення з інструкцією (перший раз)
     if 'upload_instruction_message_id' in context.user_data:
         try:
@@ -1475,9 +1540,12 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await tg_file.download_to_drive(temp_path)
 
         # ============================================================================
-        # AI-ПЕРЕВІРКА ДОКУМЕНТА
+        # AI-ПЕРЕВІРКА ДОКУМЕНТА (пропускаємо для додаткових документів)
         # ============================================================================
-        validation_result = ai_validator.validate_document(temp_path, doc_key)
+        if doc_info.get('skip_ai_validation', False):
+            validation_result = None
+        else:
+            validation_result = ai_validator.validate_document(temp_path, doc_key)
 
         # Якщо документ REJECTED - НЕ завантажуємо на Drive
         if validation_result and validation_result.is_rejected():
@@ -1644,6 +1712,109 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"❌ Помилка завантаження файлу: {str(e)}\n"
             f"Спробуйте ще раз або зв'яжіться з менеджером."
         )
+
+async def handle_additional_doc_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробляє введення назви для додаткового документа"""
+    client, admin_id = get_active_client(update, context)
+
+    if not client:
+        await update.message.reply_text("❌ Ви ще не зареєстровані. Натисніть /start")
+        return
+
+    custom_name = update.message.text.strip()
+
+    if not custom_name:
+        await update.message.reply_text("⚠️ Назва не може бути порожньою. Введіть назву документа:")
+        return ADDITIONAL_DOC_WAITING_NAME
+
+    # Отримуємо збережені дані
+    temp_path = context.user_data.get('additional_doc_temp_path')
+    file_ext = context.user_data.get('additional_doc_ext')
+
+    if not temp_path or not file_ext:
+        await update.message.reply_text("❌ Помилка: файл не знайдено. Спробуйте завантажити заново.")
+        context.user_data.pop('uploading_doc_type', None)
+        await show_checklist(update, context, force_new_message=True)
+        return
+
+    try:
+        loading_msg = await update.message.reply_text("⏳ Завантажую документ на Drive...")
+
+        # Створюємо ім'я файлу з кастомною назвою
+        safe_name = custom_name.replace('/', '_').replace('\\', '_')
+        new_file_name = f"{safe_name}{file_ext}"
+
+        # Отримуємо папку для завантаження
+        doc_key = context.user_data.get('uploading_doc_type')
+        doc_info = DOCUMENT_TYPES.get(doc_key)
+        folder_type = doc_info['folder']
+        folders = drive.create_client_folder_structure(client['full_name'], client['phone'])
+        target_folder_id = folders[folder_type]['id']
+
+        # Завантажуємо файл на Drive
+        drive_file = drive.upload_file(temp_path, target_folder_id, new_file_name)
+
+        # Додаємо документ в БД
+        document_id = db.add_document(
+            client_id=client['id'],
+            document_type=doc_key,
+            file_name=new_file_name,
+            drive_file_id=drive_file['id'],
+            drive_file_url=drive_file['webViewLink'],
+            file_size=int(drive_file.get('size', 0)),
+            uploaded_by_admin_id=admin_id
+        )
+
+        # Видаляємо тимчасовий файл
+        os.remove(temp_path)
+
+        # Очищуємо тимчасові дані
+        context.user_data.pop('additional_doc_temp_path', None)
+        context.user_data.pop('additional_doc_ext', None)
+        context.user_data.pop('additional_doc_file_id', None)
+
+        await loading_msg.delete()
+
+        # Логуємо
+        db.log_notification(
+            client_id=client['id'],
+            notification_type='document_uploaded',
+            message=f"Завантажено додатковий документ: {new_file_name}",
+            admin_telegram_id=admin_id
+        )
+
+        # Уведомляємо адмінів
+        await notify_admins(
+            f"📎 Додатковий документ завантажено\n\n"
+            f"👤 {client['full_name']}\n"
+            f"📱 {client['phone']}\n"
+            f"📄 {new_file_name}\n"
+            f"📁 <a href=\"{drive_file['webViewLink']}\">Переглянути файл</a>"
+        )
+
+        # Питаємо чи хоче завантажити ще
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Готово", callback_data=CALLBACK_DONE)],
+            [InlineKeyboardButton("📎 Завантажити ще один", callback_data=f"upload_additional_docs")]
+        ])
+
+        await update.message.reply_text(
+            f"✅ Документ \"{custom_name}\" успішно завантажено!\n\n"
+            f"Бажаєте завантажити ще один додатковий документ?",
+            reply_markup=keyboard
+        )
+
+    except Exception as e:
+        logger.error(f"Error uploading additional document: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Помилка завантаження: {str(e)}")
+        # Очищуємо дані
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+        context.user_data.pop('additional_doc_temp_path', None)
+        context.user_data.pop('additional_doc_ext', None)
+        context.user_data.pop('additional_doc_file_id', None)
+        context.user_data.pop('uploading_doc_type', None)
+        await show_checklist(update, context, force_new_message=True)
 
 async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2629,8 +2800,27 @@ def main():
         per_message=False
     )
 
+    # Additional docs conversation handler (для кастомних назв)
+    additional_docs_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(
+                (filters.Document.ALL | filters.PHOTO) & ~filters.COMMAND,
+                handle_file_upload
+            )
+        ],
+        states={
+            ADDITIONAL_DOC_WAITING_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_additional_doc_name)
+            ]
+        },
+        fallbacks=[CommandHandler('cancel', lambda u, c: show_checklist(u, c, force_new_message=True))],
+        per_message=False,
+        allow_reentry=True
+    )
+
     application.add_handler(conv_handler)
     application.add_handler(declaration_handler)
+    application.add_handler(additional_docs_handler)
     # Admin commands
     application.add_handler(CommandHandler('login', admin_login))
     application.add_handler(CommandHandler('register', admin_register))
@@ -2643,14 +2833,10 @@ def main():
         filters.TEXT & ~filters.COMMAND & filters.Regex("^📋"),
         lambda u, c: show_checklist(u, c)
     ))
-    # Обработчик текстовых сообщений (для пароля ЕЦП) - ДОЛЖЕН быть перед обработчиком файлов
+    # Обработчик текстовых сообщений (для пароля ЕЦП)
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & ~filters.Regex("^📋"),
         handle_text_message
-    ))
-    application.add_handler(MessageHandler(
-        (filters.Document.ALL | filters.PHOTO) & ~filters.COMMAND,
-        handle_file_upload
     ))
 
     # Створюємо таблицю для нагадувань (якщо не існує)

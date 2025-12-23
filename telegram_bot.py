@@ -1345,9 +1345,9 @@ async def handle_upload_request(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             message += f"📎 Надішліть файл документа.\n"
 
-        # Додаємо підказку про можливість множинної загрузки (для всіх крім additional_docs)
-        if doc_key != 'additional_docs':
-            message += f"\n💡 <i>Ви можете завантажити одразу кілька документів.\nПросто надішліть їх одним повідомленням, а потім натисніть \"Готово\".</i>\n"
+        # Додаємо підказку про можливість множинної загрузки (для всіх крім additional_docs, ecp, ecpass)
+        if doc_key not in ['additional_docs', 'ecp', 'ecpass']:
+            message += f"\n💡 <i>При необхідності, Ви можете завантажити одразу кілька документів.\nПросто надішліть їх одним повідомленням, а потім натисніть \"Готово\".</i>\n"
 
         # Добавляем видео-ссылку если есть
         if doc_info.get('video'):
@@ -1830,6 +1830,14 @@ async def handle_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc_key = context.user_data['uploading_doc_type']
     doc_info = DOCUMENT_TYPES[doc_key]
     uploaded_count = len(context.user_data.get('uploaded_files', []))
+
+    # Для additional_docs просто показуємо чек-лист без повідомлення (файли завантажуються окремо)
+    if doc_key == 'additional_docs':
+        context.user_data.pop('uploading_doc_type', None)
+        context.user_data.pop('uploaded_files', None)
+        await query.delete_message()
+        await show_checklist(update, context, force_new_message=True)
+        return
 
     # Для обычных файлов (не пароль ЕЦП)
     if uploaded_count == 0:

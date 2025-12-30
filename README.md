@@ -517,7 +517,7 @@ documents_bot/
 
 **Andrii** — Data Analyst / Automation Engineer
 
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0A66C2?logo=linkedin)](https://linkedin.com/in/your-profile)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0A66C2?logo=linkedin)](https://www.linkedin.com/in/prodby4ndry/)
 [![Telegram](https://img.shields.io/badge/Telegram-Contact-26A5E4?logo=telegram)](https://t.me/prodby4ndry)
 
 ---
